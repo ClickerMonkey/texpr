@@ -10,83 +10,20 @@ import (
 
 func TestIt(t *testing.T) {
 	const (
-		TypeInt       = TypeName("int")
-		TypeText      = TypeName("text")
-		TypeDate      = TypeName("date")
-		TypeDuration  = TypeName("duration")
-		TypeDateTime  = TypeName("dateTime")
-		TypeDayOfWeek = TypeName("dayOfWeek")
-		TypeBool      = TypeName("bool")
-		TypeUser      = TypeName("user")
-		TypeContext   = TypeName("context")
+		TypeInt         = TypeName("int")
+		TypeText        = TypeName("text")
+		TypeDate        = TypeName("date")
+		TypeDuration    = TypeName("duration")
+		TypeDateTime    = TypeName("dateTime")
+		TypeTime        = TypeName("time")
+		TypeDayOfWeek   = TypeName("dayOfWeek")
+		TypeBool        = TypeName("bool")
+		TypeUser        = TypeName("user")
+		TypeContext     = TypeName("context")
+		TypeTimePackage = TypeName("timePackage")
 	)
 
-	types := []Type{{
-		Name:        TypeInt,
-		Description: "A whole number",
-		As: map[TypeName]string{
-			TypeText: "text",
-		},
-		Values: []Value{
-			{Path: "text", Type: TypeText},
-			{Path: ">", Type: TypeBool, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: ">=", Type: TypeBool, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: "<", Type: TypeBool, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: "<=", Type: TypeBool, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: "=", Type: TypeBool, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: "!=", Type: TypeBool, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: "+", Type: TypeInt, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: "-", Type: TypeInt, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: "*", Type: TypeInt, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: "/", Type: TypeInt, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: "%", Type: TypeInt, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-		},
-		Parse: func(x string) (any, error) {
-			return strconv.ParseInt(x, 10, 64)
-		},
-	}, {
-		Name:        TypeBool,
-		Description: "A true/false value",
-		Enums:       []string{"true", "false"},
-		As: map[TypeName]string{
-			TypeText: "text",
-		},
-		Values: []Value{
-			{Path: "text", Type: TypeText},
-			{Path: "not", Type: TypeBool},
-			{Path: "and", Type: TypeBool, Variadic: true, Parameters: []Parameter{
-				{Name: "values", Type: TypeBool},
-			}},
-			{Path: "or", Type: TypeBool, Variadic: true, Parameters: []Parameter{
-				{Name: "values", Type: TypeBool},
-			}},
-		},
-		Parse: func(x string) (any, error) {
-			return strconv.ParseBool(x)
-		},
-	}, {
+	sys, err := NewSystem([]Type{{
 		Name:        TypeDayOfWeek,
 		Description: "A day of the week",
 		Enums:       []string{"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"},
@@ -153,6 +90,8 @@ func TestIt(t *testing.T) {
 		},
 		Values: []Value{
 			{Path: "text", Type: TypeText},
+			{Path: "date", Type: TypeDate},
+			{Path: "time", Type: TypeTime},
 			{Path: "hour", Type: TypeInt},
 			{Path: "minute", Type: TypeInt},
 			{Path: "second", Type: TypeInt},
@@ -169,6 +108,90 @@ func TestIt(t *testing.T) {
 			return time.Parse(time.DateTime, x)
 		},
 	}, {
+		Name:        TypeTime,
+		Description: "A time without zone",
+		As: map[TypeName]string{
+			TypeText: "text",
+		},
+		Values: []Value{
+			{Path: "text", Type: TypeText},
+			{Path: "hour", Type: TypeInt},
+			{Path: "minute", Type: TypeInt},
+			{Path: "second", Type: TypeInt},
+			{Path: "add", Type: TypeDate, Parameters: []Parameter{
+				{Name: "amount", Type: TypeInt},
+				{Name: "duration", Type: TypeDuration},
+			}},
+		},
+		Parse: func(x string) (any, error) {
+			return time.Parse(time.TimeOnly, x)
+		},
+	}, {
+		Name:        TypeInt,
+		Description: "A whole number",
+		As: map[TypeName]string{
+			TypeText: "text",
+		},
+		Values: []Value{
+			{Path: "text", Type: TypeText},
+			{Path: ">", Type: TypeBool, Parameters: []Parameter{
+				{Name: "value", Type: TypeInt},
+			}},
+			{Path: ">=", Type: TypeBool, Parameters: []Parameter{
+				{Name: "value", Type: TypeInt},
+			}},
+			{Path: "<", Type: TypeBool, Parameters: []Parameter{
+				{Name: "value", Type: TypeInt},
+			}},
+			{Path: "<=", Type: TypeBool, Parameters: []Parameter{
+				{Name: "value", Type: TypeInt},
+			}},
+			{Path: "=", Type: TypeBool, Parameters: []Parameter{
+				{Name: "value", Type: TypeInt},
+			}},
+			{Path: "!=", Type: TypeBool, Parameters: []Parameter{
+				{Name: "value", Type: TypeInt},
+			}},
+			{Path: "+", Type: TypeInt, Parameters: []Parameter{
+				{Name: "value", Type: TypeInt},
+			}},
+			{Path: "-", Type: TypeInt, Parameters: []Parameter{
+				{Name: "value", Type: TypeInt},
+			}},
+			{Path: "*", Type: TypeInt, Parameters: []Parameter{
+				{Name: "value", Type: TypeInt},
+			}},
+			{Path: "/", Type: TypeInt, Parameters: []Parameter{
+				{Name: "value", Type: TypeInt},
+			}},
+			{Path: "%", Type: TypeInt, Parameters: []Parameter{
+				{Name: "value", Type: TypeInt},
+			}},
+		},
+		Parse: func(x string) (any, error) {
+			return strconv.ParseInt(x, 10, 64)
+		},
+	}, {
+		Name:        TypeBool,
+		Description: "A true/false value",
+		Enums:       []string{"true", "false"},
+		As: map[TypeName]string{
+			TypeText: "text",
+		},
+		Values: []Value{
+			{Path: "text", Type: TypeText},
+			{Path: "not", Type: TypeBool},
+			{Path: "and", Type: TypeBool, Variadic: true, Parameters: []Parameter{
+				{Name: "values", Type: TypeBool},
+			}},
+			{Path: "or", Type: TypeBool, Variadic: true, Parameters: []Parameter{
+				{Name: "values", Type: TypeBool},
+			}},
+		},
+		Parse: func(x string) (any, error) {
+			return strconv.ParseBool(x)
+		},
+	}, {
 		Name:        TypeUser,
 		Description: "A user of our system",
 		As: map[TypeName]string{
@@ -182,9 +205,25 @@ func TestIt(t *testing.T) {
 		Name:        TypeContext,
 		Description: "The context for evaluating expressions.",
 		Values: []Value{
-			{Path: "today", Type: TypeDate},
-			{Path: "now", Type: TypeDateTime},
+			{Path: "time", Type: TypeTimePackage},
 			{Path: "user", Type: TypeUser},
+		},
+	}, {
+		Name:        TypeTimePackage,
+		Description: "The package for date & time related expressions.",
+		Values: []Value{
+			{Path: "today", Type: TypeDate},
+			{Path: "yesterday", Type: TypeDate},
+			{Path: "tomorrow", Type: TypeDate},
+			{Path: "now", Type: TypeDateTime},
+			{Path: "current", Type: TypeTime},
+			{Path: "sunday", Type: TypeDayOfWeek, Description: "An unambiguous way to refer to Sunday"},
+			{Path: "monday", Type: TypeDayOfWeek, Description: "An unambiguous way to refer to Monday"},
+			{Path: "tuesday", Type: TypeDayOfWeek, Description: "An unambiguous way to refer to Tuesday"},
+			{Path: "wednesday", Type: TypeDayOfWeek, Description: "An unambiguous way to refer to Wednesday"},
+			{Path: "thursday", Type: TypeDayOfWeek, Description: "An unambiguous way to refer to Thursday"},
+			{Path: "friday", Type: TypeDayOfWeek, Description: "An unambiguous way to refer to Friday"},
+			{Path: "saturday", Type: TypeDayOfWeek, Description: "An unambiguous way to refer to Saturday"},
 		},
 	}, {
 		Name: TypeText,
@@ -206,10 +245,15 @@ func TestIt(t *testing.T) {
 				{Name: "value", Type: TypeText},
 			}},
 		},
+		ParseOrder: -1,
 		Parse: func(x string) (any, error) {
 			return x, nil
 		},
-	}}
+	}})
+
+	if err != nil {
+		panic(err)
+	}
 
 	type Run func(v any, root any) (any, error)
 	type RunRoot func(root any) (any, error)
@@ -235,7 +279,7 @@ func TestIt(t *testing.T) {
 				}
 				runners = append(runners, run)
 			} else if current.Constant && current.Type != nil && current.Type.Parse != nil {
-				parsed, err := current.Type.Parse(current.Token)
+				parsed, err := current.Type.ParseInput(current.Token)
 				if err != nil {
 					return nil, err
 				}
@@ -271,6 +315,18 @@ func TestIt(t *testing.T) {
 		}
 	}
 
+	compileArguments := func(e *Expr, rootType *Type, withArgs func(args []RunRoot) Run) (Run, error) {
+		args := make([]RunRoot, len(e.Arguments))
+		var err error
+		for i, arg := range e.Arguments {
+			args[i], err = compile(arg, rootType)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return withArgs(args), nil
+	}
+
 	compilers = Compilers{
 		TypeDateTime: map[string]Compile{
 			"hour": func(e *Expr, rootType *Type) (Run, error) {
@@ -281,58 +337,45 @@ func TestIt(t *testing.T) {
 		},
 		TypeInt: map[string]Compile{
 			">": func(e *Expr, rootType *Type) (Run, error) {
-				other, err := compile(e.Arguments[0], rootType)
-				if err != nil {
-					return nil, err
-				}
-
-				return func(v any, root any) (any, error) {
-					o, err := other(root)
-					if err != nil {
-						return false, err
+				return compileArguments(e, rootType, func(args []RunRoot) Run {
+					return func(v any, root any) (any, error) {
+						o, err := args[0](root)
+						if err != nil {
+							return false, err
+						}
+						return v.(int64) > o.(int64), nil
 					}
-					return v.(int64) > o.(int64), nil
-				}, nil
+				})
 			},
 		},
 		TypeBool: map[string]Compile{
 			"and": func(e *Expr, rootType *Type) (Run, error) {
-				conditions := make([]RunRoot, len(e.Arguments))
-				var err error
-				for i := range e.Arguments {
-					conditions[i], err = compile(e.Arguments[i], rootType)
-					if err != nil {
-						return nil, err
-					}
-				}
-
-				return func(v, root any) (any, error) {
-					all := true
-					for _, condition := range conditions {
-						conditionValue, err := condition(root)
-						if err != nil {
-							return false, err
+				return compileArguments(e, rootType, func(args []RunRoot) Run {
+					return func(v, root any) (any, error) {
+						all := true
+						for _, condition := range args {
+							conditionValue, err := condition(root)
+							if err != nil {
+								return false, err
+							}
+							all = all && conditionValue.(bool)
 						}
-						all = all && conditionValue.(bool)
+						return all, nil
 					}
-					return all, nil
-				}, nil
+				})
 			},
 		},
 		TypeText: map[string]Compile{
 			"contains": func(e *Expr, rootType *Type) (Run, error) {
-				other, err := compile(e.Arguments[0], rootType)
-				if err != nil {
-					return nil, err
-				}
-
-				return func(v, root any) (any, error) {
-					o, err := other(root)
-					if err != nil {
-						return false, err
+				return compileArguments(e, rootType, func(args []RunRoot) Run {
+					return func(v, root any) (any, error) {
+						o, err := args[0](root)
+						if err != nil {
+							return false, err
+						}
+						return strings.Contains(v.(string), o.(string)), nil
 					}
-					return strings.Contains(v.(string), o.(string)), nil
-				}, nil
+				})
 			},
 			"lower": func(e *Expr, rootType *Type) (Run, error) {
 				return func(v, root any) (any, error) {
@@ -344,8 +387,11 @@ func TestIt(t *testing.T) {
 			"name": mapKeyCompile("name"),
 		},
 		TypeContext: map[string]Compile{
-			"now":  mapKeyCompile("now"),
+			"time": mapKeyCompile("time"),
 			"user": mapKeyCompile("user"),
+		},
+		TypeTimePackage: map[string]Compile{
+			"now": mapKeyCompile("now"),
 		},
 	}
 
@@ -355,17 +401,19 @@ func TestIt(t *testing.T) {
 		expectedString string
 		input          any
 		expectedValue  any
+		expectedType   TypeName
 	}{{
 		name: "complex",
 		options: Options{
 			RootType:     TypeContext,
 			ExpectedType: TypeBool,
-			Types:        types,
-			Expression:   "now.hour>(12).and(user.name.contains('Ma'))",
+			Expression:   "time.now.hour>(12).and(user.name.contains('Ma'))",
 		},
-		expectedString: "now.hour>('12').and(user.name.contains('Ma'))",
+		expectedString: "time.now.hour>('12').and(user.name.contains('Ma'))",
 		input: map[string]any{
-			"now": time.Date(2023, 4, 11, 13, 0, 0, 0, time.Local),
+			"time": map[string]any{
+				"now": time.Date(2023, 4, 11, 13, 0, 0, 0, time.Local),
+			},
 			"user": map[string]any{
 				"name": "Mason",
 			},
@@ -375,7 +423,6 @@ func TestIt(t *testing.T) {
 		name: "user.name.lower",
 		options: Options{
 			RootType:   TypeContext,
-			Types:      types,
 			Expression: "user.name.lower",
 		},
 		expectedString: "user.name.lower",
@@ -386,26 +433,57 @@ func TestIt(t *testing.T) {
 		},
 		expectedValue: "mason",
 	}, {
-		name: "now.hour",
+		name: "time.now.hour",
 		options: Options{
 			RootType:   TypeContext,
-			Types:      types,
-			Expression: "now.hour",
+			Expression: "time.now.hour",
 		},
-		expectedString: "now.hour",
+		expectedString: "time.now.hour",
 		input: map[string]any{
-			"now": time.Date(2023, 4, 11, 13, 0, 0, 0, time.Local),
+			"time": map[string]any{
+				"now": time.Date(2023, 4, 11, 13, 0, 0, 0, time.Local),
+			},
 		},
 		expectedValue: 13,
+	}, {
+		name: "sunday",
+		options: Options{
+			RootType:   TypeContext,
+			Expression: "sunday",
+		},
+		expectedString: "'sunday'",
+		input:          map[string]any{},
+		expectedValue:  "sunday",
+		expectedType:   TypeDayOfWeek,
+	}, {
+		name: "time.sunday",
+		options: Options{
+			RootType:   TypeContext,
+			Expression: "time.Sunday",
+		},
+		expectedString: "time.sunday",
+		input: map[string]any{
+			"time": map[string]any{
+				"sunday": "Sunday",
+			},
+		},
+		expectedValue: "sunday",
+		expectedType:  TypeDayOfWeek,
 	}}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			expr, err := Parse(test.options)
+			expr, err := sys.Parse(test.options)
 
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 				return
+			}
+
+			if test.expectedType != TypeName("") {
+				if test.expectedType != expr.Type.Name {
+					t.Fatalf("expected type %s but got %s", test.expectedType, expr.Type.Name)
+				}
 			}
 
 			serial := expr.String()
@@ -414,13 +492,7 @@ func TestIt(t *testing.T) {
 				t.Fatalf("serialized expression did not match expected: %s", serial)
 			}
 
-			var rootType *Type
-			for _, t := range test.options.Types {
-				if t.Name.ToKey() == test.options.RootType.ToKey() {
-					rootType = &t
-					break
-				}
-			}
+			rootType := sys.Type(test.options.RootType)
 
 			compiled, err := compile(expr, rootType)
 			if err != nil {

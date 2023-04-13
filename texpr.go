@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 )
 
@@ -14,20 +15,56 @@ func (tn TypeName) ToKey() string {
 }
 
 type Type struct {
-	Name        TypeName
-	Description string
-	Values      []Value
-	As          map[TypeName]string
-	Enums       []string
-	Parse       func(x string) (any, error)
+	Name        TypeName                    `json:"name"`
+	Description string                      `json:"description,omitempty"`
+	Values      []Value                     `json:"values,omitempty"`
+	As          map[TypeName]string         `json:"as,omitempty"`
+	Enums       []string                    `json:"enums,omitempty"`
+	Parse       func(x string) (any, error) `json:"-"`
+	ParseOrder  int                         `json:"parseOrder,omitempty"`
+
+	values map[string]*Value
+	as     map[TypeName]*Value
+	enums  map[string]string
+}
+
+func (t Type) Value(path string) *Value {
+	return t.values[strings.ToLower(path)]
+}
+
+func (t Type) AsValue(other TypeName) *Value {
+	return t.as[other]
+}
+
+func (t Type) EnumFor(input string) (string, bool) {
+	value, ok := t.enums[strings.ToLower(input)]
+	return value, ok
+}
+
+func (t Type) ParseInput(input string) (any, error) {
+	if t.Parse == nil {
+		value, exists := t.EnumFor(input)
+		if exists {
+			return value, nil
+		}
+		return nil, ErrNoParse
+	}
+	return t.Parse(input)
 }
 
 type Value struct {
-	Path        string
-	Description string
-	Type        TypeName
-	Parameters  []Parameter
-	Variadic    bool
+	Path        string      `json:"path"`
+	Aliases     []string    `json:"aliases,omitempty"`
+	Description string      `json:"description,omitempty"`
+	Type        TypeName    `json:"type"`
+	Parameters  []Parameter `json:"parameters,omitempty"`
+	Variadic    bool        `json:"variadic,omitempty"`
+
+	valueType *Type
+}
+
+func (v Value) ValueType() *Type {
+	return v.valueType
 }
 
 func (v Value) MaxParameters() int {
@@ -60,24 +97,51 @@ func (v Value) Parameter(i int) *Parameter {
 }
 
 type Parameter struct {
-	Type        TypeName
-	Name        string
-	Description string
-	Default     *string
+	Type        TypeName `json:"type"`
+	Name        string   `json:"name,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Default     *string  `json:"default,omitempty"`
+
+	parameterType *Type
+}
+
+func (p Parameter) ParameterType() *Type {
+	return p.parameterType
 }
 
 type Expr struct {
-	Token     string
-	Constant  bool
-	Value     *Value
-	Type      *Type
+	// The string parsed from the expression input.
+	Token string
+	// The start position of the expression in the input.
+	Start int
+	// The end position of the expression in the input.
+	End int
+	// If this expression is a constant value and not a value.
+	Constant bool
+	// The parsed value if this expression is a constant.
+	Parsed any
+	// The value this expression is in the parent type.
+	Value *Value
+	// The parent type if any.
+	ParentType *Type
+	// The type of this value/constant.
+	Type *Type
+	// The arguments to pass as the parameters to the value.
 	Arguments []*Expr
-	Next      *Expr
-	Prev      *Expr
-	Parent    *Expr
+	// The next expression in the chain on the result of this one.
+	Next *Expr
+	// The previous expression in the chain or nil. When nil this is either a constant
+	// or a value on the root type.
+	Prev *Expr
+	// The expression this is an argument for, which is only set on the first expression in a chain.
+	Parent *Expr
+	// The parameter this expression is on if any. This is only set for the first expression in the chain.
 	Parameter *Parameter
+	// The system that created the expression.
+	System *System
 }
 
+// Converts the expression to a string.
 func (e Expr) String() string {
 	out := strings.Builder{}
 	c := &e
@@ -107,20 +171,118 @@ func (e Expr) String() string {
 	return out.String()
 }
 
+type System struct {
+	types      []*Type
+	typeMap    map[string]*Type
+	parseOrder []*Type
+}
+
+func NewSystem(types []Type) (System, error) {
+	sys := System{
+		types:      make([]*Type, len(types)),
+		typeMap:    make(map[string]*Type),
+		parseOrder: make([]*Type, 0, len(types)),
+	}
+	for i := range types {
+		t := &types[i]
+		t.values = make(map[string]*Value)
+		t.as = make(map[TypeName]*Value)
+		t.enums = make(map[string]string)
+
+		if len(t.Values) > 0 {
+			for k := range t.Values {
+				v := &t.Values[k]
+				t.values[strings.ToLower(v.Path)] = v
+				if len(v.Aliases) > 0 {
+					for _, a := range v.Aliases {
+						t.values[strings.ToLower(a)] = v
+					}
+				}
+			}
+		}
+		if len(t.As) > 0 {
+			for typeName, valuePath := range t.As {
+				value := t.Value(valuePath)
+				if value == nil {
+					return sys, fmt.Errorf("%s as %s using value %s could not be found", t.Name, typeName, valuePath)
+				}
+				t.as[typeName] = value
+			}
+		}
+		if len(t.Enums) > 0 {
+			for _, enumValue := range t.Enums {
+				t.enums[strings.ToLower(enumValue)] = enumValue
+			}
+		}
+
+		sys.types[i] = t
+		sys.typeMap[t.Name.ToKey()] = t
+
+		if t.Parse != nil || len(t.Enums) > 0 {
+			sys.parseOrder = append(sys.parseOrder, t)
+		}
+	}
+
+	for _, t := range sys.typeMap {
+		for _, v := range t.values {
+			v.valueType = sys.Type(v.Type)
+			if v.valueType == nil {
+				return sys, fmt.Errorf("type %s on %s.%s could not be found", v.Type, t.Name, v.Path)
+			}
+
+			if len(v.Parameters) > 0 {
+				for _, p := range v.Parameters {
+					p.parameterType = sys.Type(p.Type)
+					if p.parameterType == nil {
+						return sys, fmt.Errorf("type %s on %s.%s (parameter %s) could not be found", v.Type, t.Name, v.Path, p.Name)
+					}
+				}
+			}
+		}
+	}
+
+	// Prefer types with parse logic, then enums. Sort by name length preferring longest.
+	sort.Slice(sys.parseOrder, func(i, j int) bool {
+		a := sys.parseOrder[i]
+		b := sys.parseOrder[j]
+		if a.ParseOrder != b.ParseOrder {
+			return a.ParseOrder > b.ParseOrder
+		}
+		if (a.Parse != nil) != (b.Parse != nil) {
+			return (a.Parse != nil)
+		}
+		return len(string(a.Name)) > len(string(b.Name))
+	})
+
+	return sys, nil
+}
+
+func (s System) Type(name TypeName) *Type {
+	return s.typeMap[name.ToKey()]
+}
+
+func (s System) Types() []*Type {
+	return s.types
+}
+
+func (s System) ParseOrder() []*Type {
+	return s.parseOrder
+}
+
 type Options struct {
 	RootType     TypeName
 	ExpectedType TypeName
 	Expression   string
-	Types        []Type
 }
 
+var ErrNoParse = errors.New("no parser exists for type")
 var ErrNoTypes = errors.New("no types passed to parse")
 var ErrNoExpression = errors.New("no expression given")
 var ErrNoRootType = errors.New("no root type passed to parse")
 var ErrInvalidRootType = errors.New("invalid root type passed to parse")
 
-func Parse(opts Options) (*Expr, error) {
-	if len(opts.Types) == 0 {
+func (sys System) Parse(opts Options) (*Expr, error) {
+	if len(sys.Types()) == 0 {
 		return nil, ErrNoTypes
 	}
 	if len(opts.Expression) == 0 {
@@ -130,28 +292,8 @@ func Parse(opts Options) (*Expr, error) {
 		return nil, ErrNoRootType
 	}
 
-	type typeEntry struct {
-		Type   *Type
-		Values map[string]*Value
-	}
-
-	typeMap := make(map[string]typeEntry)
-	for i := range opts.Types {
-		t := &opts.Types[i]
-		k := t.Name.ToKey()
-		entry := typeEntry{
-			Type:   t,
-			Values: make(map[string]*Value),
-		}
-		for j := range t.Values {
-			v := &t.Values[j]
-			entry.Values[strings.ToLower(v.Path)] = v
-		}
-		typeMap[k] = entry
-	}
-
-	root := typeMap[opts.RootType.ToKey()]
-	if root.Type == nil {
+	root := sys.Type(opts.RootType)
+	if root == nil {
 		return nil, ErrInvalidRootType
 	}
 
@@ -171,15 +313,12 @@ func Parse(opts Options) (*Expr, error) {
 		var parent *Expr
 
 		for current != nil {
-			currentValue := parentType.Values[strings.ToLower(current.Token)]
+			currentValue := parentType.Value(current.Token)
+
+			current.ParentType = parentType
 
 			if currentValue != nil && !current.Constant {
-				currentValueType := typeMap[currentValue.Type.ToKey()]
-				if currentValueType.Type == nil {
-					return fmt.Errorf("type %s on value %s.%s does not exist", currentValue.Type, current.Token, parentType.Type.Name)
-				}
-
-				current.Type = currentValueType.Type
+				current.Type = currentValue.ValueType()
 				current.Value = currentValue
 
 				args := current.Arguments
@@ -188,19 +327,15 @@ func Parse(opts Options) (*Expr, error) {
 				argMax := currentValue.MaxParameters()
 
 				if argCount < argMin {
-					return fmt.Errorf("%s.%s expects at least %d parameters", current.Token, parentType.Type.Name, currentValue.MinParameters())
+					return fmt.Errorf("%s.%s expects at least %d parameters", current.Token, parentType.Name, currentValue.MinParameters())
 				}
 				if argCount > argMax {
-					return fmt.Errorf("%s.%s expects no more than %d parameters", current.Token, parentType.Type.Name, currentValue.MaxParameters())
+					return fmt.Errorf("%s.%s expects no more than %d parameters", current.Token, parentType.Name, currentValue.MaxParameters())
 				}
 
 				for i := 0; i < argCount; i++ {
 					param := currentValue.Parameter(i)
-					paramType := typeMap[param.Type.ToKey()]
-					if paramType.Type == nil {
-						return fmt.Errorf("parameter %s at %d has type %s which was not defined", param.Name, i, param.Type)
-					}
-					err := link(current.Arguments[i], paramType.Type)
+					err := link(current.Arguments[i], param.parameterType)
 					if err != nil {
 						return err
 					}
@@ -209,39 +344,35 @@ func Parse(opts Options) (*Expr, error) {
 
 				for i := argCount; i < len(currentValue.Parameters); i++ {
 					param := currentValue.Parameter(i)
-					paramType := typeMap[param.Type.ToKey()]
-					if paramType.Type == nil {
-						return fmt.Errorf("parameter %s at %d has type %s which was not defined", param.Name, i, param.Type)
-					}
 					if param.Default == nil {
 						return fmt.Errorf("parameter %s at %d was not given a value or a default value", param.Name, i)
 					}
 					arg := &Expr{
 						Token:     *param.Default,
 						Constant:  true,
-						Type:      paramType.Type,
+						Type:      param.parameterType,
 						Parameter: param,
 						Parent:    current,
 					}
 					current.Arguments = append(current.Arguments, arg)
 				}
 			} else if current.Constant || currentValue == nil {
-				if current.Next == nil {
-					_, err := expectedType.Parse(current.Token)
+				if current.Next == nil && expectedType != nil {
+					parsed, err := expectedType.Parse(current.Token)
 					if err != nil {
 						return fmt.Errorf("constant %s did not match expected type %s", current.Token, expectedType.Name)
 					}
 					current.Type = expectedType
 					current.Constant = true
+					current.Parsed = parsed
 				} else {
-					for _, entry := range typeMap {
-						if entry.Type.Parse != nil {
-							_, err := entry.Type.Parse(current.Token)
-							if err != nil {
-								current.Type = entry.Type
-								current.Constant = true
-								break
-							}
+					for _, parser := range sys.ParseOrder() {
+						parsed, err := parser.Parse(current.Token)
+						if err == nil {
+							current.Type = parser
+							current.Constant = true
+							current.Parsed = parsed
+							break
 						}
 					}
 				}
@@ -249,45 +380,27 @@ func Parse(opts Options) (*Expr, error) {
 				if current.Type == nil {
 					return fmt.Errorf("type could not be determined for %s", current.Token)
 				}
-
-				if len(current.Type.Enums) > 0 {
-					matching := false
-					for _, enumText := range current.Type.Enums {
-						if strings.EqualFold(current.Token, enumText) {
-							current.Token = enumText
-							current.Constant = true
-							matching = true
-							break
-						}
-					}
-					if !matching {
-						return fmt.Errorf("%s does not match any expected enum values for %s", current.Token, current.Type.Name)
-					}
-				}
 			} else {
 				return fmt.Errorf("unexpected token %s", current.Token)
 			}
 
 			parent = current
-			parentType = typeMap[current.Type.Name.ToKey()]
+			parentType = current.Type
 			current = current.Next
 		}
 
 		if parent != nil && expectedType != nil && parent.Type.Name != expectedType.Name {
-			convert := parent.Type.As[expectedType.Name]
-			if convert != "" {
-				convertType := typeMap[parent.Type.Name.ToKey()]
-				convertValue := convertType.Values[strings.ToLower(convert)]
-				if convertValue != nil {
-					next := &Expr{
-						Token: convert,
-						Type:  expectedType,
-						Value: convertValue,
-						Prev:  parent,
-					}
-					parent.Next = next
-					parent = next
+			convert := parent.Type.AsValue(expectedType.Name)
+			if convert != nil {
+				next := &Expr{
+					Token:      convert.Path,
+					Type:       expectedType,
+					Value:      convert,
+					Prev:       parent,
+					ParentType: parent.Type,
 				}
+				parent.Next = next
+				parent = next
 			}
 		}
 
@@ -300,7 +413,7 @@ func Parse(opts Options) (*Expr, error) {
 
 	var expectedType *Type
 	if opts.ExpectedType != "" {
-		expectedType = typeMap[opts.ExpectedType.ToKey()].Type
+		expectedType = sys.Type(opts.ExpectedType)
 	}
 
 	err := link(p.first, expectedType)
@@ -312,14 +425,21 @@ func Parse(opts Options) (*Expr, error) {
 }
 
 type parser struct {
+	// the stack of parameterized expressions the prev expression is in.
 	parents []*Expr
-	prev    *Expr
-	first   *Expr
-	e       string
-	n       int
-	i       int
+	// the previously parsed expression, or nil at the start of a new chain.
+	prev *Expr
+	// the first parsed expression in the input.
+	first *Expr
+	// the input
+	e string
+	// the cached length of the input
+	n int
+	// the current place in the parser
+	i int
 }
 
+// Creates a new parser for the given expression.
 func newParser(e string) parser {
 	return parser{
 		e: e,
@@ -328,6 +448,7 @@ func newParser(e string) parser {
 	}
 }
 
+// If the parser still has expressions to parse.
 func (p *parser) hasData() bool {
 	return p.i < p.n
 }
@@ -337,23 +458,29 @@ func (p *parser) hasData() bool {
 // represents a different part of an expression string then the internal state
 // of the parser moves forward to parse an expression on the next call.
 func (p *parser) parseExpr() (expr *Expr, err error) {
-	b := p.e[p.i]
-	switch b {
-	case '(':
-		p.parents = append(p.parents, p.prev)
-		p.prev = nil
-		p.i++
-	case ')':
-		n := len(p.parents) - 1
-		p.prev = p.parents[n]
-		p.parents = p.parents[:n]
-		p.i++
-	case '.', ',':
-		p.i++
-	case '"', '\'':
-		expr, err = p.parseString(b)
-	default:
-		expr, err = p.parseToken()
+	searching := p.i < p.n
+	for searching {
+		b := p.e[p.i]
+		switch b {
+		case '(':
+			p.parents = append(p.parents, p.prev)
+			p.prev = nil
+			p.i++
+		case ')':
+			n := len(p.parents) - 1
+			p.prev = p.parents[n]
+			p.parents = p.parents[:n]
+			p.i++
+		case '.', ',':
+			p.i++
+		case '"', '\'':
+			expr, err = p.parseConstant()
+			searching = false
+		default:
+			expr, err = p.parseToken()
+			searching = false
+		}
+		searching = searching && p.i < p.n
 	}
 
 	if p.i == p.n && err == nil && len(p.parents) != 0 {
@@ -363,15 +490,23 @@ func (p *parser) parseExpr() (expr *Expr, err error) {
 	return expr, err
 }
 
+// Returns the expression but updates the Prev, Next, Arguments, and Parent of this expression
+// and related expression.
 func (p *parser) newExpr(e *Expr) *Expr {
+	// The first expression is what Parse returns.
 	if p.first == nil {
 		p.first = e
 	}
+	// Keep track of the previous expression
 	e.Prev = p.prev
+	// Link up Prev's Next to this
 	if p.prev != nil {
 		p.prev.Next = e
 	}
+	// This is the new prev
 	p.prev = e
+	// If this is the first expresion in an argument, add it to the parent expressions
+	// argument list and set parent.
 	if len(p.parents) > 0 && e.Prev == nil {
 		parent := p.parents[len(p.parents)-1]
 		parent.Arguments = append(parent.Arguments, e)
@@ -380,31 +515,34 @@ func (p *parser) newExpr(e *Expr) *Expr {
 	return e
 }
 
+// Parses a token. A token is a value on type (parameterized and non-parameterized)
+// or a constant not surrounded with quotes.
 func (p *parser) parseToken() (*Expr, error) {
-	k := p.i
 	out := strings.Builder{}
-	b := p.e[k]
+	b := p.e[p.i]
 	word := wordChars[b]
-	for k < p.n {
-		b = p.e[k]
+	start := p.i
+	for p.i < p.n {
+		b = p.e[p.i]
 		if stopChars[b] || (word && !wordChars[b]) {
 			break
 		}
 		out.WriteByte(b)
-		k++
+		p.i++
 	}
-	p.i = k
-	return p.newExpr(&Expr{Token: out.String()}), nil
+	return p.newExpr(&Expr{Token: out.String(), Start: start, End: p.i}), nil
 }
 
-func (p *parser) parseString(end byte) (*Expr, error) {
-	k := p.i
+// Parses a constant surrounded with quotes.
+func (p *parser) parseConstant() (*Expr, error) {
 	out := strings.Builder{}
 	escaped := false
-	for k < p.n {
-		k++
-		b := p.e[k]
-		if b == '/' && !escaped {
+	end := p.e[p.i]
+	start := p.i
+	for p.i < p.n {
+		p.i++
+		b := p.e[p.i]
+		if b == '\\' && !escaped {
 			escaped = true
 			continue
 		}
@@ -419,18 +557,20 @@ func (p *parser) parseString(end byte) (*Expr, error) {
 			}
 		}
 		if b == end && !escaped {
-			p.i = k + 1
-			return p.newExpr(&Expr{Token: out.String(), Constant: true}), nil
+			p.i++
+			return p.newExpr(&Expr{Token: out.String(), Constant: true, Start: start, End: p.i}), nil
 		}
 		out.WriteByte(b)
 		escaped = false
 	}
 
-	return nil, fmt.Errorf("string starting at %d did not have a terminating %s", p.i, string([]byte{end}))
+	return nil, fmt.Errorf("quoted constant starting at %d did not have a terminating %s", p.i, string([]byte{end}))
 }
 
+// Any chars that end a token.
 var stopChars = charsToMap(".,()")
 
+// Any chars that are valid ".name" values.
 var wordChars = charsToMap("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
 
 func charsToMap(x string) map[byte]bool {
