@@ -3,6 +3,7 @@ package texpr
 import (
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -79,7 +80,9 @@ type Value struct {
 	// The description of the value.
 	Description string `json:"description,omitempty"`
 	// The type of the value.
-	Type TypeName `json:"type"`
+	Type TypeName `json:"type,omitempty"`
+	// If the value is has a generic type that's determined based on one or more generic parameters.
+	Generic bool `json:"generic,omitempty"`
 	// The parameters for the value.
 	Parameters []Parameter `json:"parameters,omitempty"`
 	// If the last parameter can be specified any number of times.
@@ -128,12 +131,36 @@ func (v Value) Parameter(i int) *Parameter {
 	return &v.Parameters[i]
 }
 
+// Determines the type for this value for the given expression. If this value
+// is generic the types of the generic parameters will be used to determine the returned type.
+func (v Value) GetType(e *Expr) *Type {
+	if !v.Generic {
+		return v.valueType
+	}
+	genericTypes := make([]*Type, 0)
+	if len(e.Arguments) > 0 {
+		for _, arg := range e.Arguments {
+			if arg.Type != nil && arg.Parameter.Generic {
+				genericTypes = append(genericTypes, arg.Type)
+			}
+		}
+	}
+	return getBaseType(genericTypes)
+}
+
 // A parameter to a parameterized value. Type or Generic is required.
 type Parameter struct {
-	Type        TypeName `json:"type"`
-	Name        string   `json:"name,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Default     *string  `json:"default,omitempty"`
+	// The expected type for the parameter. Either this or Generic is required.
+	Type TypeName `json:"type,omitempty"`
+	// If there is no expected type, but this parameter and potentially others need to be the same type.
+	// The generic parameters can also decide the type of generic value.
+	Generic bool `json:"generic,omitempty"`
+	// The name of the parameter.
+	Name string `json:"name,omitempty"`
+	// A more detailed description of the parameter.
+	Description string `json:"description,omitempty"`
+	// A default value, making this an optional parameter. This must be a valid value that can be parsed by the type.
+	Default *string `json:"default,omitempty"`
 
 	parameterType *Type
 }
@@ -144,8 +171,11 @@ func (p Parameter) ParameterType() *Type {
 
 // The position of a character in a multi-line string.
 type Position struct {
-	Index  int
-	Line   int
+	// The index of the character in Options.Expression
+	Index int
+	// The line of the character, where \n delimits lines.
+	Line int
+	// The column of the character in its line.
 	Column int
 }
 
@@ -311,6 +341,8 @@ func NewSystemRequired(types []Type) System {
 	return sys
 }
 
+var pathValidator = regexp.MustCompile(`^([a-zA-Z0-9_]+|[^a-zA-Z0-9_,\.\(\)][^,\.\(\)]*)$`)
+
 // Returns a new system and if any errors were found building the system.
 func NewSystem(types []Type) (System, error) {
 	sys := System{
@@ -327,10 +359,40 @@ func NewSystem(types []Type) (System, error) {
 		if len(t.Values) > 0 {
 			for k := range t.Values {
 				v := &t.Values[k]
+				if !pathValidator.MatchString(v.Path) {
+					return sys, SystemError{
+						Message: fmt.Sprintf("%s is not a valid path in %s", v.Path, t.Name),
+						Type:    t,
+					}
+				}
+
 				t.values[strings.ToLower(v.Path)] = v
 				if len(v.Aliases) > 0 {
 					for _, a := range v.Aliases {
 						t.values[strings.ToLower(a)] = v
+					}
+				}
+
+				if v.Generic == (v.Type != "") {
+					return sys, SystemError{
+						Message: fmt.Sprintf("value %s.%s must have either a type or generic but not both", t.Name, v.Path),
+						Type:    t,
+					}
+				}
+				if v.Generic {
+					genericCount := 0
+					if len(v.Parameters) > 0 {
+						for _, param := range v.Parameters {
+							if param.Generic {
+								genericCount++
+							}
+						}
+					}
+					if genericCount == 0 {
+						return sys, SystemError{
+							Message: fmt.Sprintf("value %s.%s cannot have a generic type without one or more generic parameters.", t.Name, v.Path),
+							Type:    t,
+						}
 					}
 				}
 			}
@@ -365,7 +427,7 @@ func NewSystem(types []Type) (System, error) {
 	for _, t := range sys.typeMap {
 		for _, v := range t.values {
 			v.valueType = sys.Type(v.Type)
-			if v.valueType == nil {
+			if v.valueType == nil && !v.Generic {
 				return sys, SystemError{
 					Message: fmt.Sprintf("type %s on %s.%s could not be found", v.Type, t.Name, v.Path),
 					Value:   v,
@@ -375,7 +437,7 @@ func NewSystem(types []Type) (System, error) {
 			if len(v.Parameters) > 0 {
 				for _, p := range v.Parameters {
 					p.parameterType = sys.Type(p.Type)
-					if p.parameterType == nil {
+					if p.parameterType == nil && !v.Generic {
 						return sys, SystemError{
 							Message:   fmt.Sprintf("type %s on %s.%s (parameter %s) could not be found", v.Type, t.Name, v.Path, p.Name),
 							Value:     v,
@@ -503,6 +565,20 @@ func (sys System) link(e *Expr, expectedTypes []*Type, root *Type) error {
 			err := sys.linkArguments(current, root)
 			if err != nil {
 				return err
+			}
+
+			// For generic values, calculate the type now that the argument types are determined.
+			if currentValue.Generic {
+				current.Type = currentValue.GetType(current)
+				if current.Type == nil {
+					return NewParseError(current, fmt.Sprintf("generic type could not be determined for %s", current.Token))
+				}
+				// Convert the generic arguments to the expected types
+				for _, arg := range current.Arguments {
+					if arg.Parameter.Generic {
+						sys.convertToExpected(arg.Last(), []*Type{current.Type})
+					}
+				}
 			}
 
 			// if it is a constant or does not match a value on the parent type
@@ -839,4 +915,32 @@ func getTypeNames(types []*Type) string {
 		names[i] = string(t.Name)
 	}
 	return strings.Join(names, ", ")
+}
+
+func getBaseType(types []*Type) *Type {
+	if len(types) == 0 {
+		return nil
+	}
+	if len(types) == 1 {
+		return types[0]
+	}
+	allSame := true
+	for i := 1; i < len(types); i++ {
+		allSame = allSame && types[i] == types[0]
+	}
+	if allSame {
+		return types[0]
+	}
+	for i := range types {
+		a := types[i]
+		allA := true
+		for k := range types {
+			b := types[k]
+			allA = allA && ((a.Name == b.Name) || (b.as[a.Name] != nil))
+		}
+		if allA {
+			return a
+		}
+	}
+	return nil
 }

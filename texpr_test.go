@@ -192,6 +192,10 @@ var sys = NewSystemRequired([]Type{{
 		{Path: "or", Type: typeBool, Variadic: true, Parameters: []Parameter{
 			{Name: "values", Type: typeBool},
 		}},
+		{Path: "then", Generic: true, Parameters: []Parameter{
+			{Name: "trueValue", Generic: true},
+			{Name: "falseValue", Generic: true},
+		}},
 	},
 	Parse: func(x string) (any, error) {
 		switch strings.ToLower(x) {
@@ -309,6 +313,13 @@ var compileOptions = CompileOptions[Run]{
 					}
 				}
 				return true, nil
+			}),
+			"then": runCompilerLazy(func(v bool, args []func() (any, error)) (any, error) {
+				if v {
+					return args[0]()
+				} else {
+					return args[1]()
+				}
 			}),
 		},
 		typeText: ValueCompilers[Run]{
@@ -507,6 +518,50 @@ func TestIt(t *testing.T) {
 		},
 		expectedType:  typeBool,
 		expectedValue: true,
+	}, {
+		name: "generic true",
+		options: Options{
+			RootType:   typeUser,
+			Expression: "name.len=(12).then(A, B)",
+		},
+		input: map[string]any{
+			"name": "pmd@site.com",
+		},
+		expectedType:  typeText,
+		expectedValue: "A",
+	}, {
+		name: "generic false",
+		options: Options{
+			RootType:   typeUser,
+			Expression: "name.len=(13).then(A, B)",
+		},
+		input: map[string]any{
+			"name": "pmd@site.com",
+		},
+		expectedType:  typeText,
+		expectedValue: "B",
+	}, {
+		name: "generic mixed types",
+		options: Options{
+			RootType:   typeUser,
+			Expression: "name.len=(12).then(A, name.len)",
+		},
+		input: map[string]any{
+			"name": "pmd@site.com",
+		},
+		expectedType:  typeText,
+		expectedValue: "A",
+	}, {
+		name: "generic mixed types convert",
+		options: Options{
+			RootType:   typeUser,
+			Expression: "name.len=(13).then(A, name.len)",
+		},
+		input: map[string]any{
+			"name": "pmd@site.com",
+		},
+		expectedType:  typeText,
+		expectedValue: "12",
 	}}
 
 	for _, test := range tests {
@@ -575,6 +630,29 @@ func runCompiler[T any](call func(v T, args []any) (any, error)) Compiler[Run] {
 				args[i], err = arguments[i](root)
 				if err != nil {
 					return nil, err
+				}
+			}
+			if asType, ok := prev.(T); ok {
+				return call(asType, args)
+			} else {
+				return nil, fmt.Errorf("unexpected type: %v, wanted %v", reflect.TypeOf(prev), reflect.TypeOf((*T)(nil)).Elem())
+			}
+		}, nil
+	}
+}
+
+func runCompilerLazy[T any](call func(v T, args []func() (any, error)) (any, error)) Compiler[Run] {
+	return func(e *Expr, root *Type, previous Run, arguments []Run) (Run, error) {
+		return func(root any) (any, error) {
+			prev, err := previous(root)
+			if err != nil {
+				return nil, err
+			}
+			args := make([]func() (any, error), len(arguments))
+			for i := range args {
+				k := i
+				args[k] = func() (any, error) {
+					return arguments[k](root)
 				}
 			}
 			if asType, ok := prev.(T); ok {
