@@ -366,6 +366,14 @@ func TestIt(t *testing.T) {
 					}
 				})
 			},
+			"text": func(e *Expr, rootType *Type) (Run, error) {
+				return func(v, root any) (any, error) {
+					if b, ok := v.(bool); ok && b {
+						return "true", nil
+					}
+					return "false", nil
+				}, nil
+			},
 		},
 		TypeText: map[string]Compile{
 			"contains": func(e *Expr, rootType *Type) (Run, error) {
@@ -410,9 +418,9 @@ func TestIt(t *testing.T) {
 	}{{
 		name: "complex",
 		options: Options{
-			RootType:     TypeContext,
-			ExpectedType: TypeBool,
-			Expression:   "time.now.hour>(12).and(user.name.contains('Ma'))",
+			RootType:      TypeContext,
+			ExpectedTypes: []TypeName{TypeBool},
+			Expression:    "time.now.hour>(12).and(user.name.contains('Ma'))",
 		},
 		expectedString: "time.now.hour>('12').and(user.name.contains('Ma'))",
 		input: map[string]any{
@@ -449,7 +457,7 @@ func TestIt(t *testing.T) {
 				"now": time.Date(2023, 4, 11, 13, 0, 0, 0, time.Local),
 			},
 		},
-		expectedValue: 13,
+		expectedValue: int64(13),
 	}, {
 		name: "sunday",
 		options: Options{
@@ -529,6 +537,41 @@ func TestIt(t *testing.T) {
 			assert.Nil(t, e.Next.Parsed)
 		},
 		expectedError: "expression expecting a value but found nothing",
+	}, {
+		name: "bool detect",
+		options: Options{
+			RootType:   TypeContext,
+			Expression: "true",
+		},
+		expectedType:  TypeBool,
+		expectedValue: true,
+	}, {
+		name: "bool detect convert to text",
+		options: Options{
+			RootType:      TypeContext,
+			Expression:    "true",
+			ExpectedTypes: []TypeName{TypeText},
+		},
+		expectedType:  TypeText,
+		expectedValue: "true",
+	}, {
+		name: "bool detect expect many stay same",
+		options: Options{
+			RootType:      TypeContext,
+			Expression:    "true",
+			ExpectedTypes: []TypeName{TypeBool, TypeText},
+		},
+		expectedType:  TypeBool,
+		expectedValue: true,
+	}, {
+		name: "bool detect expect many convert to text",
+		options: Options{
+			RootType:      TypeContext,
+			Expression:    "true",
+			ExpectedTypes: []TypeName{TypeInt, TypeText},
+		},
+		expectedType:  TypeText,
+		expectedValue: "true",
 	}}
 
 	for _, test := range tests {
@@ -578,10 +621,7 @@ func TestIt(t *testing.T) {
 				}
 			}
 
-			actual := fmt.Sprintf("%+v", result)
-			expected := fmt.Sprintf("%+v", test.expectedValue)
-
-			assert.Equal(t, expected, actual)
+			assert.Equal(t, test.expectedValue, result)
 
 			if test.expectedError != "" {
 				t.Fatalf("expected error but none found: %v", test.expectedError)

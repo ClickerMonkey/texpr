@@ -198,6 +198,18 @@ func (e *Expr) Chain() []*Expr {
 	return chain
 }
 
+func (e *Expr) TypeOneOf(types []*Type) bool {
+	if e == nil || e.Type == nil {
+		return len(types) == 0
+	}
+	for _, t := range types {
+		if t.Name == e.Type.Name {
+			return true
+		}
+	}
+	return false
+}
+
 type ParseError struct {
 	Message   string
 	Expr      *Expr
@@ -349,9 +361,9 @@ func (s System) ParseOrder() []*Type {
 }
 
 type Options struct {
-	RootType     TypeName
-	ExpectedType TypeName
-	Expression   string
+	RootType      TypeName
+	ExpectedTypes []TypeName
+	Expression    string
 }
 
 var ErrNoTypes = NewParseError(nil, "undefined types")
@@ -374,36 +386,33 @@ func (sys System) Parse(opts Options) (*Expr, error) {
 		return nil, NewParseError(nil, fmt.Sprintf("undefined root type: %s", opts.RootType))
 	}
 
-	var expectedType *Type
-	if opts.ExpectedType != "" {
-		expectedType = sys.Type(opts.ExpectedType)
-		if expectedType == nil {
-			return nil, NewParseError(nil, fmt.Sprintf("undefined expected type: %s", opts.ExpectedType))
+	expectedTypes := make([]*Type, len(opts.ExpectedTypes))
+	if len(opts.ExpectedTypes) >= 0 {
+		for i, name := range opts.ExpectedTypes {
+			expectedTypes[i] = sys.Type(name)
+			if expectedTypes[i] == nil {
+				return nil, NewParseError(nil, fmt.Sprintf("undefined expected type: %s", name))
+			}
 		}
 	}
 
+	err := error(nil)
 	p := newParser(opts.Expression)
-	for p.hasData() {
-		_, err := p.parseExpr()
-		if err != nil {
-			// Even though a parse error occurred, try to link up the types & values, ignore
-			// any error because we already know it failed.
-			sys.link(p.first, expectedType, root)
 
-			// Return original parse error
-			return p.first, err
-		}
+	for p.hasData() && err == nil {
+		_, err = p.parseExpr()
 	}
 
-	err := sys.link(p.first, expectedType, root)
-	if err != nil {
-		return p.first, err
+	// Always try to link the types, values, parameters, etc to expressions even if there was a parse error
+	linkError := sys.link(p.first, expectedTypes, root)
+	if err == nil {
+		err = linkError
 	}
 
-	return p.first, nil
+	return p.first, err
 }
 
-func (sys System) link(e *Expr, expectedType *Type, root *Type) error {
+func (sys System) link(e *Expr, expectedTypes []*Type, root *Type) error {
 	current := e
 	parentType := root
 	var parent *Expr
@@ -426,14 +435,14 @@ func (sys System) link(e *Expr, expectedType *Type, root *Type) error {
 			// if it is a constant or does not match a value on the parent type
 		} else if current.Constant || currentValue == nil {
 			// if its a lone constant and an expected type is given, parse using only that
-			if current.Next == nil && expectedType != nil {
-				err := sys.setExpectedConstant(current, expectedType)
+			if current.Next == nil && len(expectedTypes) > 0 {
+				err := sys.setConstant(current, expectedTypes, true)
 				if err != nil {
 					return err
 				}
 				// its not a lone constant or there is no expected type
 			} else if current.Prev == nil {
-				sys.setConstant(current)
+				sys.setConstant(current, sys.parseOrder, false)
 				if current.Type == nil {
 					return NewParseError(current, fmt.Sprintf("type could not be determined for %s", current.Token))
 				}
@@ -449,58 +458,58 @@ func (sys System) link(e *Expr, expectedType *Type, root *Type) error {
 		current = current.Next
 	}
 
-	parent = sys.convertToExpected(parent, expectedType)
+	// Try to auto-cast the last expression to an expected type in the order they were given.
+	parent = sys.convertToExpected(parent, expectedTypes)
 
-	if expectedType != nil && parent != nil && parent.Type.Name != expectedType.Name {
-		return NewParseError(parent, fmt.Sprintf("expected type %s but was given %s instead", expectedType.Name, parent.Type.Name))
+	// If the last expression does not match an expected type, error.
+	if parent != nil && len(expectedTypes) > 0 && !parent.TypeOneOf(expectedTypes) {
+		return NewParseError(parent, fmt.Sprintf("expected type(s) %s but was given %s instead", getTypeNames(expectedTypes), parent.Type.Name))
 	}
 
 	return nil
 }
 
-func (sys System) convertToExpected(last *Expr, expectedType *Type) *Expr {
-	if last == nil || expectedType == nil || last.Type.Name == expectedType.Name {
+func (sys System) convertToExpected(last *Expr, expectedTypes []*Type) *Expr {
+	if last == nil || len(expectedTypes) == 0 || last.TypeOneOf(expectedTypes) {
 		return last
 	}
-	convert := last.Type.AsValue(expectedType.Name)
-	if convert != nil {
-		next := &Expr{
-			Token:      convert.Path,
-			Type:       expectedType,
-			Value:      convert,
-			Prev:       last,
-			ParentType: last.Type,
+
+	for _, expectedType := range expectedTypes {
+		convert := last.Type.AsValue(expectedType.Name)
+		if convert != nil {
+			next := &Expr{
+				Token:      convert.Path,
+				Type:       expectedType,
+				Value:      convert,
+				Prev:       last,
+				ParentType: last.Type,
+			}
+			last.Next = next
+			last = next
+
+			break
 		}
-		last.Next = next
-		last = next
 	}
 
 	return last
 }
 
-func (sys System) setExpectedConstant(current *Expr, expectedType *Type) error {
-	parsed, err := expectedType.Parse(current.Token)
-	if err != nil {
-		return NewParseError(current, fmt.Sprintf("constant %s did not match expected type %s", current.Token, expectedType.Name))
-	}
-
-	current.Type = expectedType
-	current.Constant = true
-	current.Parsed = parsed
-
-	return nil
-}
-
-func (sys System) setConstant(current *Expr) {
-	for _, parser := range sys.ParseOrder() {
-		parsed, err := parser.Parse(current.Token)
+func (sys System) setConstant(current *Expr, tryTypes []*Type, required bool) error {
+	for _, parser := range tryTypes {
+		parsed, err := parser.ParseInput(current.Token)
 		if err == nil {
 			current.Type = parser
 			current.Constant = true
 			current.Parsed = parsed
-			break
+			return nil
 		}
 	}
+
+	if required {
+		return NewParseError(current, fmt.Sprintf("constant %s did not match expected type(s) %s", current.Token, getTypeNames(tryTypes)))
+	}
+
+	return nil
 }
 
 func (sys System) linkArguments(current *Expr, root *Type) error {
@@ -518,7 +527,11 @@ func (sys System) linkArguments(current *Expr, root *Type) error {
 
 	for i := 0; i < argCount; i++ {
 		param := current.Value.Parameter(i)
-		err := sys.link(current.Arguments[i], param.parameterType, root)
+		parameterType := make([]*Type, 0)
+		if param.parameterType != nil {
+			parameterType = append(parameterType, param.parameterType)
+		}
+		err := sys.link(current.Arguments[i], parameterType, root)
 		if err != nil {
 			return err
 		}
@@ -532,12 +545,19 @@ func (sys System) linkArguments(current *Expr, root *Type) error {
 			err.Parameter = param
 			return err
 		}
+		parsed, parseError := param.parameterType.ParseInput(*param.Default)
+		if parseError != nil {
+			err := NewParseError(current, parseError.Error())
+			err.Parameter = param
+			return err
+		}
 		arg := &Expr{
 			Token:     *param.Default,
 			Constant:  true,
 			Type:      param.parameterType,
 			Parameter: param,
 			Parent:    current,
+			Parsed:    parsed,
 		}
 		current.Arguments = append(current.Arguments, arg)
 	}
@@ -728,10 +748,19 @@ var wordChars = charsToMap("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
 // Any chars where you would expect another expression to follow
 var nextChars = charsToMap("(,.")
 
+// converts every byte in the given string into a map where each byte given has a true value and any byte not found in the map will be false
 func charsToMap(x string) map[byte]bool {
 	m := make(map[byte]bool, len(x))
 	for i := range x {
 		m[x[i]] = true
 	}
 	return m
+}
+
+func getTypeNames(types []*Type) string {
+	names := make([]string, len(types))
+	for i, t := range types {
+		names[i] = string(t.Name)
+	}
+	return strings.Join(names, ", ")
 }
