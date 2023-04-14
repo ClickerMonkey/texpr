@@ -109,13 +109,19 @@ func (p Parameter) ParameterType() *Type {
 	return p.parameterType
 }
 
+type Position struct {
+	Index  int
+	Line   int
+	Column int
+}
+
 type Expr struct {
 	// The string parsed from the expression input.
 	Token string
 	// The start position of the expression in the input.
-	Start int
+	Start Position
 	// The end position of the expression in the input.
-	End int
+	End Position
 	// If this expression is a constant value and not a value.
 	Constant bool
 	// The parsed value if this expression is a constant.
@@ -169,6 +175,24 @@ func (e Expr) String() string {
 	}
 
 	return out.String()
+}
+
+func (e *Expr) Last() *Expr {
+	c := e
+	for c.Next != nil {
+		c = c.Next
+	}
+	return c
+}
+
+func (e *Expr) Chain() []*Expr {
+	chain := make([]*Expr, 0)
+	c := e
+	for c != nil {
+		chain = append(chain, c)
+		c = c.Next
+	}
+	return chain
 }
 
 type System struct {
@@ -437,6 +461,10 @@ type parser struct {
 	n int
 	// the current place in the parser
 	i int
+	// the current column in the line
+	lineReset int
+	// the current line
+	line int
 }
 
 // Creates a new parser for the given expression.
@@ -453,6 +481,15 @@ func (p *parser) hasData() bool {
 	return p.i < p.n
 }
 
+// The current position.
+func (p parser) position() Position {
+	return Position{
+		Index:  p.i,
+		Column: p.i - p.lineReset,
+		Line:   p.line,
+	}
+}
+
 // Parses the expression at the current character. If the current character
 // is the start of an expression the expression is returned. If the character
 // represents a different part of an expression string then the internal state
@@ -462,6 +499,12 @@ func (p *parser) parseExpr() (expr *Expr, err error) {
 	for searching {
 		b := p.e[p.i]
 		switch b {
+		case '\n':
+			p.i++
+			p.line++
+			p.lineReset = p.i
+		case ' ', '\t', '\r', '\f', '\v':
+			p.i++
 		case '(':
 			p.parents = append(p.parents, p.prev)
 			p.prev = nil
@@ -521,7 +564,7 @@ func (p *parser) parseToken() (*Expr, error) {
 	out := strings.Builder{}
 	b := p.e[p.i]
 	word := wordChars[b]
-	start := p.i
+	start := p.position()
 	for p.i < p.n {
 		b = p.e[p.i]
 		if stopChars[b] || (word && !wordChars[b]) {
@@ -530,7 +573,7 @@ func (p *parser) parseToken() (*Expr, error) {
 		out.WriteByte(b)
 		p.i++
 	}
-	return p.newExpr(&Expr{Token: out.String(), Start: start, End: p.i}), nil
+	return p.newExpr(&Expr{Token: out.String(), Start: start, End: p.position()}), nil
 }
 
 // Parses a constant surrounded with quotes.
@@ -538,7 +581,7 @@ func (p *parser) parseConstant() (*Expr, error) {
 	out := strings.Builder{}
 	escaped := false
 	end := p.e[p.i]
-	start := p.i
+	start := p.position()
 	for p.i < p.n {
 		p.i++
 		b := p.e[p.i]
@@ -558,7 +601,7 @@ func (p *parser) parseConstant() (*Expr, error) {
 		}
 		if b == end && !escaped {
 			p.i++
-			return p.newExpr(&Expr{Token: out.String(), Constant: true, Start: start, End: p.i}), nil
+			return p.newExpr(&Expr{Token: out.String(), Constant: true, Start: start, End: p.position()}), nil
 		}
 		out.WriteByte(b)
 		escaped = false

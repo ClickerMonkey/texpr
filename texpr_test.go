@@ -391,7 +391,8 @@ func TestIt(t *testing.T) {
 			"user": mapKeyCompile("user"),
 		},
 		TypeTimePackage: map[string]Compile{
-			"now": mapKeyCompile("now"),
+			"now":    mapKeyCompile("now"),
+			"sunday": mapKeyCompile("sunday"),
 		},
 	}
 
@@ -461,10 +462,24 @@ func TestIt(t *testing.T) {
 			RootType:   TypeContext,
 			Expression: "time.Sunday",
 		},
-		expectedString: "time.sunday",
+		expectedString: "time.Sunday",
 		input: map[string]any{
 			"time": map[string]any{
-				"sunday": "Sunday",
+				"sunday": "sunday",
+			},
+		},
+		expectedValue: "sunday",
+		expectedType:  TypeDayOfWeek,
+	}, {
+		name: "time.sunday with tab",
+		options: Options{
+			RootType:   TypeContext,
+			Expression: "\n\ttime.\tSunday\n",
+		},
+		expectedString: "time.Sunday",
+		input: map[string]any{
+			"time": map[string]any{
+				"sunday": "sunday",
 			},
 		},
 		expectedValue: "sunday",
@@ -481,8 +496,9 @@ func TestIt(t *testing.T) {
 			}
 
 			if test.expectedType != TypeName("") {
-				if test.expectedType != expr.Type.Name {
-					t.Fatalf("expected type %s but got %s", test.expectedType, expr.Type.Name)
+				last := expr.Last()
+				if test.expectedType != last.Type.Name {
+					t.Fatalf("expected type %s but got %s", test.expectedType, last.Type.Name)
 				}
 			}
 

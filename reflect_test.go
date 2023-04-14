@@ -155,13 +155,9 @@ func TestReflect(t *testing.T) {
 		panic(err)
 	}
 
-	c, err := r.Compile(e)
+	eval := r.Compile(e)
 
-	if err != nil {
-		panic(err)
-	}
-
-	v, err := c(MessageContext{
+	v, err := eval(MessageContext{
 		Message: "Hello World!",
 		Time: TimePackage{
 			Now:    time.Now(),

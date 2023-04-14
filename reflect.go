@@ -25,14 +25,18 @@ type ReflectOptions struct {
 	Types       map[reflect.Type]Type
 }
 
+type reflectGetter = func(v reflect.Value, root reflect.Value, e *Expr) (reflect.Value, error)
+
 type Reflect struct {
 	options ReflectOptions
 	system  System
+	getters map[TypeName]map[string]reflectGetter
 }
 
 func NewReflect(options ReflectOptions) (r *Reflect, err error) {
 	r = &Reflect{
 		options: options,
+		getters: make(map[TypeName]map[string]reflectGetter),
 	}
 
 	if options.Conversions == nil {
@@ -54,6 +58,8 @@ func NewReflect(options ReflectOptions) (r *Reflect, err error) {
 	systemTypes := make([]Type, 0, len(options.Types))
 
 	for rt, t := range options.Types {
+		r.getters[t.Name] = make(map[string]reflectGetter)
+
 		if t.Parse == nil && reflect.PointerTo(rt).Implements(TypeOf[encoding.TextUnmarshaler]()) {
 			t.Parse = func(x string) (any, error) {
 				y, ok := reflect.New(rt).Interface().(encoding.TextUnmarshaler)
@@ -85,6 +91,10 @@ func NewReflect(options ReflectOptions) (r *Reflect, err error) {
 				}
 				if valueIndex != -1 {
 					t.Values[valueIndex] = *value
+				}
+
+				r.getters[t.Name][path] = func(v, root reflect.Value, e *Expr) (reflect.Value, error) {
+					return v.FieldByIndexErr(field.Index)
 				}
 			}
 		}
@@ -140,6 +150,32 @@ func NewReflect(options ReflectOptions) (r *Reflect, err error) {
 			if valueIndex != -1 {
 				t.Values[valueIndex] = *value
 			}
+
+			r.getters[t.Name][strings.ToLower(m.Name)] = func(v, root reflect.Value, e *Expr) (reflect.Value, error) {
+				vm := v.Method(m.Index)
+				// lastArgumentIndex := m.Type.NumIn() - 1
+				// lastArgumentType := m.Type.In(lastArgumentIndex)
+				args := make([]reflect.Value, len(e.Arguments))
+				// variadicType :=
+				for i, arg := range e.Arguments {
+					argValue, err := r.eval(root, root, arg)
+					if err != nil {
+						return reflect.Value{}, err
+					}
+					// inType := m.Type.In(lastArgumentIndex)
+					// if i < lastArgumentIndex {
+					// 	inType = m.Type.In(i + 1)
+					// }
+					args[i] = argValue
+				}
+				result := vm.Call(args)
+				if len(result) == 2 && !result[1].IsNil() {
+					if err, ok := result[1].Interface().(error); ok {
+						return reflect.Value{}, err
+					}
+				}
+				return result[0], nil
+			}
 		}
 
 		systemTypes = append(systemTypes, t)
@@ -149,6 +185,75 @@ func NewReflect(options ReflectOptions) (r *Reflect, err error) {
 	r.system, err = NewSystem(systemTypes)
 
 	return
+}
+
+type ReflectCompiled func(root any) (any, error)
+
+func (r Reflect) Parse(opts Options) (*Expr, error) {
+	return r.system.Parse(opts)
+}
+
+func (r Reflect) Compile(e *Expr) ReflectCompiled {
+	return func(root any) (any, error) {
+		rootReflect := reflect.ValueOf(root)
+		val, err := r.eval(rootReflect, rootReflect, e)
+		if err != nil {
+			return nil, err
+		}
+		return val.Interface(), nil
+	}
+}
+
+func (r Reflect) eval(v, root reflect.Value, e *Expr) (reflect.Value, error) {
+	if e.Constant {
+		return reflect.ValueOf(e.Parsed), nil
+	} else {
+		parent := e.ParentType
+		if parent == nil {
+			parent = e.Prev.Type
+		}
+		getter := r.getters[parent.Name][strings.ToLower(e.Value.Path)]
+		if getter == nil {
+			return reflect.Value{}, fmt.Errorf("no getter found for %s.%s", parent.Name, e.Value.Path)
+		}
+		nextValue, err := getter(v, root, e)
+		if e.Next != nil && err == nil {
+			nextValue, err = r.eval(nextValue, root, e.Next)
+		}
+		return nextValue, err
+	}
+}
+
+func (r Reflect) convertToExpected(v reflect.Value, expected reflect.Type) (reflect.Value, error) {
+	if v.Type() == expected {
+		return v, nil
+	}
+
+	if convertTo, ok := r.options.Conversions[v.Type()]; ok {
+		converted, err := convertTo.ConvertTo(v.Interface())
+		if err != nil {
+			return v, err
+		}
+		v = reflect.ValueOf(converted)
+	} else if convertFrom, ok := r.options.Conversions[expected]; ok {
+		converted, err := convertFrom.ConvertFrom(v.Interface())
+		if err != nil {
+			return v, err
+		}
+		v = reflect.ValueOf(converted)
+	}
+	if v.Type() == expected {
+		return v, nil
+	}
+	if v.Type() == reflect.PointerTo(expected) {
+		return v.Elem(), nil
+	}
+	if reflect.PointerTo(v.Type()) == expected {
+		ptr := reflect.New(v.Type())
+		ptr.Elem().Set(v)
+		return ptr, nil
+	}
+	return v, fmt.Errorf("no conversion could be made for %v to %v", v, expected)
 }
 
 func findValue(token string, t Type) (*Value, int) {
@@ -186,16 +291,4 @@ func getFields(rt reflect.Type) map[string]reflect.StructField {
 		}
 	}
 	return m
-}
-
-type ReflectRun func(root any) (any, error)
-
-func (r Reflect) Parse(opts Options) (*Expr, error) {
-	return r.system.Parse(opts)
-}
-
-func (r Reflect) Compile(e *Expr) (ReflectRun, error) {
-	return func(root any) (any, error) {
-		return root, nil
-	}, nil
 }
