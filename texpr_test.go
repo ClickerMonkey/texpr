@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestIt(t *testing.T) {
@@ -403,6 +405,8 @@ func TestIt(t *testing.T) {
 		input          any
 		expectedValue  any
 		expectedType   TypeName
+		expectedError  string
+		expectedCheck  func(*Expr, *testing.T)
 	}{{
 		name: "complex",
 		options: Options{
@@ -484,47 +488,103 @@ func TestIt(t *testing.T) {
 		},
 		expectedValue: "sunday",
 		expectedType:  TypeDayOfWeek,
+	}, {
+		name: "time.sun error",
+		options: Options{
+			RootType:   TypeContext,
+			Expression: "time.sun",
+		},
+		expectedError: "invalid value sun",
+	}, {
+		name: "time.sun error check",
+		options: Options{
+			RootType:   TypeContext,
+			Expression: "time.sun",
+		},
+		expectedCheck: func(e *Expr, t *testing.T) {
+			assert.Equal(t, e.Token, "time")
+			assert.NotNil(t, e.Type)
+			assert.Equal(t, e.Type.Name, TypeTimePackage)
+			assert.NotNil(t, e.Next)
+			assert.Equal(t, e.Next.Token, "sun")
+			assert.Nil(t, e.Next.Type)
+			assert.Nil(t, e.Next.Value)
+			assert.Nil(t, e.Next.Parsed)
+		},
+		expectedError: "invalid value sun",
+	}, {
+		name: "time. error check",
+		options: Options{
+			RootType:   TypeContext,
+			Expression: "time.",
+		},
+		expectedCheck: func(e *Expr, t *testing.T) {
+			assert.Equal(t, e.Token, "time")
+			assert.NotNil(t, e.Type)
+			assert.Equal(t, e.Type.Name, TypeTimePackage)
+			assert.NotNil(t, e.Next)
+			assert.Equal(t, e.Next.Token, "")
+			assert.Nil(t, e.Next.Type)
+			assert.Nil(t, e.Next.Value)
+			assert.Nil(t, e.Next.Parsed)
+		},
+		expectedError: "expression expecting a value but found nothing",
 	}}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			expr, err := sys.Parse(test.options)
 
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-				return
+			if test.expectedCheck != nil {
+				test.expectedCheck(expr, t)
 			}
 
-			if test.expectedType != TypeName("") {
-				last := expr.Last()
-				if test.expectedType != last.Type.Name {
-					t.Fatalf("expected type %s but got %s", test.expectedType, last.Type.Name)
+			if err != nil {
+				if test.expectedError != "" {
+					assert.Equal(t, test.expectedError, err.Error())
+					return
+				} else {
+					t.Fatalf("unexpected parse error: %v", err)
 				}
 			}
 
-			serial := expr.String()
+			if test.expectedType != "" {
+				assert.Equal(t, test.expectedType, expr.Last().Type.Name)
+			}
 
-			if serial != test.expectedString {
-				t.Fatalf("serialized expression did not match expected: %s", serial)
+			if test.expectedString != "" {
+				assert.Equal(t, test.expectedString, expr.String())
 			}
 
 			rootType := sys.Type(test.options.RootType)
 
 			compiled, err := compile(expr, rootType)
 			if err != nil {
-				t.Fatalf("compilation error: %v", err)
+				if test.expectedError != "" {
+					assert.Equal(t, test.expectedError, err.Error())
+					return
+				} else {
+					t.Fatalf("compilation error: %v", err)
+				}
 			}
 
 			result, err := compiled(test.input)
 			if err != nil {
-				t.Fatalf("execution error: %v", err)
+				if test.expectedError != "" {
+					assert.Equal(t, test.expectedError, err.Error())
+					return
+				} else {
+					t.Fatalf("execution error: %v", err)
+				}
 			}
 
 			actual := fmt.Sprintf("%+v", result)
 			expected := fmt.Sprintf("%+v", test.expectedValue)
 
-			if actual != expected {
-				t.Fatalf("Fail, actual: %s, expected: %s", actual, expected)
+			assert.Equal(t, expected, actual)
+
+			if test.expectedError != "" {
+				t.Fatalf("expected error but none found: %v", test.expectedError)
 			}
 		})
 	}

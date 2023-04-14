@@ -1,7 +1,6 @@
 package texpr
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -47,7 +46,7 @@ func (t Type) ParseInput(input string) (any, error) {
 		if exists {
 			return value, nil
 		}
-		return nil, ErrNoParse
+		return nil, fmt.Errorf("parsing is not supported for %v", t.Name)
 	}
 	return t.Parse(input)
 }
@@ -113,6 +112,10 @@ type Position struct {
 	Index  int
 	Line   int
 	Column int
+}
+
+func (p Position) String() string {
+	return fmt.Sprintf("(index: %d, line: %d, column: %d)", p.Index, p.Line, p.Column)
 }
 
 type Expr struct {
@@ -195,6 +198,46 @@ func (e *Expr) Chain() []*Expr {
 	return chain
 }
 
+type ParseError struct {
+	Message   string
+	Expr      *Expr
+	Parameter *Parameter
+	Start     *Position
+	End       *Position
+}
+
+var _ error = ParseError{}
+
+func NewParseError(expr *Expr, message string) ParseError {
+	e := ParseError{
+		Message: message,
+		Expr:    expr,
+	}
+	if expr != nil {
+		e.Start = &expr.Start
+		e.End = &expr.End
+	}
+	return e
+}
+
+func (e ParseError) Error() string {
+	return e.Message
+}
+
+type SystemError struct {
+	Message   string
+	Type      *Type
+	Value     *Value
+	Parameter *Parameter
+	Path      *string
+}
+
+var _ error = SystemError{}
+
+func (e SystemError) Error() string {
+	return e.Message
+}
+
 type System struct {
 	types      []*Type
 	typeMap    map[string]*Type
@@ -228,7 +271,11 @@ func NewSystem(types []Type) (System, error) {
 			for typeName, valuePath := range t.As {
 				value := t.Value(valuePath)
 				if value == nil {
-					return sys, fmt.Errorf("%s as %s using value %s could not be found", t.Name, typeName, valuePath)
+					return sys, SystemError{
+						Message: fmt.Sprintf("%s as %s using value %s could not be found", t.Name, typeName, valuePath),
+						Type:    t,
+						Path:    &valuePath,
+					}
 				}
 				t.as[typeName] = value
 			}
@@ -251,14 +298,22 @@ func NewSystem(types []Type) (System, error) {
 		for _, v := range t.values {
 			v.valueType = sys.Type(v.Type)
 			if v.valueType == nil {
-				return sys, fmt.Errorf("type %s on %s.%s could not be found", v.Type, t.Name, v.Path)
+				return sys, SystemError{
+					Message: fmt.Sprintf("type %s on %s.%s could not be found", v.Type, t.Name, v.Path),
+					Value:   v,
+				}
 			}
 
 			if len(v.Parameters) > 0 {
 				for _, p := range v.Parameters {
 					p.parameterType = sys.Type(p.Type)
 					if p.parameterType == nil {
-						return sys, fmt.Errorf("type %s on %s.%s (parameter %s) could not be found", v.Type, t.Name, v.Path, p.Name)
+						return sys, SystemError{
+							Message:   fmt.Sprintf("type %s on %s.%s (parameter %s) could not be found", v.Type, t.Name, v.Path, p.Name),
+							Value:     v,
+							Type:      t,
+							Parameter: &p,
+						}
 					}
 				}
 			}
@@ -299,11 +354,9 @@ type Options struct {
 	Expression   string
 }
 
-var ErrNoParse = errors.New("no parser exists for type")
-var ErrNoTypes = errors.New("no types passed to parse")
-var ErrNoExpression = errors.New("no expression given")
-var ErrNoRootType = errors.New("no root type passed to parse")
-var ErrInvalidRootType = errors.New("invalid root type passed to parse")
+var ErrNoTypes = NewParseError(nil, "undefined types")
+var ErrNoExpression = NewParseError(nil, "undefined expression")
+var ErrNoRoot = NewParseError(nil, "undefined root type")
 
 func (sys System) Parse(opts Options) (*Expr, error) {
 	if len(sys.Types()) == 0 {
@@ -312,140 +365,184 @@ func (sys System) Parse(opts Options) (*Expr, error) {
 	if len(opts.Expression) == 0 {
 		return nil, ErrNoExpression
 	}
-	if len(opts.RootType) == 0 {
-		return nil, ErrNoRootType
+	if opts.RootType == "" {
+		return nil, ErrNoRoot
 	}
 
 	root := sys.Type(opts.RootType)
 	if root == nil {
-		return nil, ErrInvalidRootType
+		return nil, NewParseError(nil, fmt.Sprintf("undefined root type: %s", opts.RootType))
+	}
+
+	var expectedType *Type
+	if opts.ExpectedType != "" {
+		expectedType = sys.Type(opts.ExpectedType)
+		if expectedType == nil {
+			return nil, NewParseError(nil, fmt.Sprintf("undefined expected type: %s", opts.ExpectedType))
+		}
 	}
 
 	p := newParser(opts.Expression)
 	for p.hasData() {
 		_, err := p.parseExpr()
 		if err != nil {
-			return nil, err
+			// Even though a parse error occurred, try to link up the types & values, ignore
+			// any error because we already know it failed.
+			sys.link(p.first, expectedType, root)
+
+			// Return original parse error
+			return p.first, err
 		}
 	}
 
-	var link func(e *Expr, expectedType *Type) error
-
-	link = func(e *Expr, expectedType *Type) error {
-		current := e
-		parentType := root
-		var parent *Expr
-
-		for current != nil {
-			currentValue := parentType.Value(current.Token)
-
-			current.ParentType = parentType
-
-			if currentValue != nil && !current.Constant {
-				current.Type = currentValue.ValueType()
-				current.Value = currentValue
-
-				args := current.Arguments
-				argCount := len(args)
-				argMin := currentValue.MinParameters()
-				argMax := currentValue.MaxParameters()
-
-				if argCount < argMin {
-					return fmt.Errorf("%s.%s expects at least %d parameters", current.Token, parentType.Name, currentValue.MinParameters())
-				}
-				if argCount > argMax {
-					return fmt.Errorf("%s.%s expects no more than %d parameters", current.Token, parentType.Name, currentValue.MaxParameters())
-				}
-
-				for i := 0; i < argCount; i++ {
-					param := currentValue.Parameter(i)
-					err := link(current.Arguments[i], param.parameterType)
-					if err != nil {
-						return err
-					}
-					current.Arguments[i].Parameter = param
-				}
-
-				for i := argCount; i < len(currentValue.Parameters); i++ {
-					param := currentValue.Parameter(i)
-					if param.Default == nil {
-						return fmt.Errorf("parameter %s at %d was not given a value or a default value", param.Name, i)
-					}
-					arg := &Expr{
-						Token:     *param.Default,
-						Constant:  true,
-						Type:      param.parameterType,
-						Parameter: param,
-						Parent:    current,
-					}
-					current.Arguments = append(current.Arguments, arg)
-				}
-			} else if current.Constant || currentValue == nil {
-				if current.Next == nil && expectedType != nil {
-					parsed, err := expectedType.Parse(current.Token)
-					if err != nil {
-						return fmt.Errorf("constant %s did not match expected type %s", current.Token, expectedType.Name)
-					}
-					current.Type = expectedType
-					current.Constant = true
-					current.Parsed = parsed
-				} else {
-					for _, parser := range sys.ParseOrder() {
-						parsed, err := parser.Parse(current.Token)
-						if err == nil {
-							current.Type = parser
-							current.Constant = true
-							current.Parsed = parsed
-							break
-						}
-					}
-				}
-
-				if current.Type == nil {
-					return fmt.Errorf("type could not be determined for %s", current.Token)
-				}
-			} else {
-				return fmt.Errorf("unexpected token %s", current.Token)
-			}
-
-			parent = current
-			parentType = current.Type
-			current = current.Next
-		}
-
-		if parent != nil && expectedType != nil && parent.Type.Name != expectedType.Name {
-			convert := parent.Type.AsValue(expectedType.Name)
-			if convert != nil {
-				next := &Expr{
-					Token:      convert.Path,
-					Type:       expectedType,
-					Value:      convert,
-					Prev:       parent,
-					ParentType: parent.Type,
-				}
-				parent.Next = next
-				parent = next
-			}
-		}
-
-		if expectedType != nil && parent != nil && parent.Type.Name != expectedType.Name {
-			return fmt.Errorf("expected type %s but was given %s instead", expectedType.Name, parent.Type.Name)
-		}
-
-		return nil
-	}
-
-	var expectedType *Type
-	if opts.ExpectedType != "" {
-		expectedType = sys.Type(opts.ExpectedType)
-	}
-
-	err := link(p.first, expectedType)
+	err := sys.link(p.first, expectedType, root)
 	if err != nil {
-		return nil, err
+		return p.first, err
 	}
 
 	return p.first, nil
+}
+
+func (sys System) link(e *Expr, expectedType *Type, root *Type) error {
+	current := e
+	parentType := root
+	var parent *Expr
+
+	for current != nil {
+		currentValue := parentType.Value(current.Token)
+
+		current.ParentType = parentType
+
+		// if it matches a value on the parent type and is not a constant
+		if currentValue != nil && !current.Constant {
+			current.Type = currentValue.ValueType()
+			current.Value = currentValue
+
+			err := sys.linkArguments(current, root)
+			if err != nil {
+				return err
+			}
+
+			// if it is a constant or does not match a value on the parent type
+		} else if current.Constant || currentValue == nil {
+			// if its a lone constant and an expected type is given, parse using only that
+			if current.Next == nil && expectedType != nil {
+				err := sys.setExpectedConstant(current, expectedType)
+				if err != nil {
+					return err
+				}
+				// its not a lone constant or there is no expected type
+			} else if current.Prev == nil {
+				sys.setConstant(current)
+				if current.Type == nil {
+					return NewParseError(current, fmt.Sprintf("type could not be determined for %s", current.Token))
+				}
+			} else {
+				return NewParseError(current, fmt.Sprintf("invalid value %s", current.Token))
+			}
+		} else {
+			return NewParseError(current, fmt.Sprintf("unexpected token %s", current.Token))
+		}
+
+		parent = current
+		parentType = current.Type
+		current = current.Next
+	}
+
+	parent = sys.convertToExpected(parent, expectedType)
+
+	if expectedType != nil && parent != nil && parent.Type.Name != expectedType.Name {
+		return NewParseError(parent, fmt.Sprintf("expected type %s but was given %s instead", expectedType.Name, parent.Type.Name))
+	}
+
+	return nil
+}
+
+func (sys System) convertToExpected(last *Expr, expectedType *Type) *Expr {
+	if last == nil || expectedType == nil || last.Type.Name == expectedType.Name {
+		return last
+	}
+	convert := last.Type.AsValue(expectedType.Name)
+	if convert != nil {
+		next := &Expr{
+			Token:      convert.Path,
+			Type:       expectedType,
+			Value:      convert,
+			Prev:       last,
+			ParentType: last.Type,
+		}
+		last.Next = next
+		last = next
+	}
+
+	return last
+}
+
+func (sys System) setExpectedConstant(current *Expr, expectedType *Type) error {
+	parsed, err := expectedType.Parse(current.Token)
+	if err != nil {
+		return NewParseError(current, fmt.Sprintf("constant %s did not match expected type %s", current.Token, expectedType.Name))
+	}
+
+	current.Type = expectedType
+	current.Constant = true
+	current.Parsed = parsed
+
+	return nil
+}
+
+func (sys System) setConstant(current *Expr) {
+	for _, parser := range sys.ParseOrder() {
+		parsed, err := parser.Parse(current.Token)
+		if err == nil {
+			current.Type = parser
+			current.Constant = true
+			current.Parsed = parsed
+			break
+		}
+	}
+}
+
+func (sys System) linkArguments(current *Expr, root *Type) error {
+	args := current.Arguments
+	argCount := len(args)
+	argMin := current.Value.MinParameters()
+	argMax := current.Value.MaxParameters()
+
+	if argCount < argMin {
+		return NewParseError(current, fmt.Sprintf("%s.%s expects at least %d parameters", current.Token, current.ParentType.Name, argMin))
+	}
+	if argCount > argMax {
+		return NewParseError(current, fmt.Sprintf("%s.%s expects no more than %d parameters", current.Token, current.ParentType.Name, argMax))
+	}
+
+	for i := 0; i < argCount; i++ {
+		param := current.Value.Parameter(i)
+		err := sys.link(current.Arguments[i], param.parameterType, root)
+		if err != nil {
+			return err
+		}
+		current.Arguments[i].Parameter = param
+	}
+
+	for i := argCount; i < len(current.Value.Parameters); i++ {
+		param := current.Value.Parameter(i)
+		if param.Default == nil {
+			err := NewParseError(current, fmt.Sprintf("parameter %s at %d was not given a value or a default value", param.Name, i))
+			err.Parameter = param
+			return err
+		}
+		arg := &Expr{
+			Token:     *param.Default,
+			Constant:  true,
+			Type:      param.parameterType,
+			Parameter: param,
+			Parent:    current,
+		}
+		current.Arguments = append(current.Arguments, arg)
+	}
+
+	return nil
 }
 
 type parser struct {
@@ -461,7 +558,7 @@ type parser struct {
 	n int
 	// the current place in the parser
 	i int
-	// the current column in the line
+	// the position the last time line changed, used to calculate column.
 	lineReset int
 	// the current line
 	line int
@@ -471,7 +568,6 @@ type parser struct {
 func newParser(e string) parser {
 	return parser{
 		e: e,
-		i: 0,
 		n: len(e),
 	}
 }
@@ -511,6 +607,9 @@ func (p *parser) parseExpr() (expr *Expr, err error) {
 			p.i++
 		case ')':
 			n := len(p.parents) - 1
+			if n == -1 {
+				return expr, NewParseError(expr, fmt.Sprintf("unexpected ) at %v", p.position()))
+			}
 			p.prev = p.parents[n]
 			p.parents = p.parents[:n]
 			p.i++
@@ -527,7 +626,17 @@ func (p *parser) parseExpr() (expr *Expr, err error) {
 	}
 
 	if p.i == p.n && err == nil && len(p.parents) != 0 {
-		err = fmt.Errorf("expression missing %d terminating parenthesis", len(p.parents))
+		err = NewParseError(expr, fmt.Sprintf("expression missing %d terminating parenthesis", len(p.parents)))
+	}
+
+	// When an error has occurred and the previous character indicated we expect something
+	// next add an empty expression to make that clear that nothing was given when something
+	// was expected.
+	if p.i > 0 && nextChars[p.e[p.i-1]] {
+		expr = p.newExpr(&Expr{Start: p.position(), End: p.position()})
+		if err == nil {
+			err = NewParseError(expr, fmt.Sprintf("expression expecting a value but found nothing"))
+		}
 	}
 
 	return expr, err
@@ -607,7 +716,7 @@ func (p *parser) parseConstant() (*Expr, error) {
 		escaped = false
 	}
 
-	return nil, fmt.Errorf("quoted constant starting at %d did not have a terminating %s", p.i, string([]byte{end}))
+	return nil, NewParseError(nil, fmt.Sprintf("quoted constant starting at %v did not have a terminating %s", start, string([]byte{end})))
 }
 
 // Any chars that end a token.
@@ -615,6 +724,9 @@ var stopChars = charsToMap(".,()")
 
 // Any chars that are valid ".name" values.
 var wordChars = charsToMap("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+
+// Any chars where you would expect another expression to follow
+var nextChars = charsToMap("(,.")
 
 func charsToMap(x string) map[byte]bool {
 	m := make(map[byte]bool, len(x))

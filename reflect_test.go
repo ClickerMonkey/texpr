@@ -142,33 +142,36 @@ func TestReflect(t *testing.T) {
 		},
 	})
 
-	if err != nil {
-		panic(err)
-	}
+	t.Run("reflect", func(t *testing.T) {
 
-	e, err := r.Parse(Options{
-		RootType:   NameOf[MessageContext](),
-		Expression: "time.now.hour.add(1).equals(8)",
+		if err != nil {
+			panic(err)
+		}
+
+		e, err := r.Parse(Options{
+			RootType:   NameOf[MessageContext](),
+			Expression: "time.now.hour.add(1).equals(8)",
+		})
+
+		if err != nil {
+			panic(err)
+		}
+
+		eval := r.Compile(e)
+
+		v, err := eval(MessageContext{
+			Message: "Hello World!",
+			Time: TimePackage{
+				Now:    time.Now(),
+				Today:  time.Now().Local(),
+				Sunday: time.Sunday,
+			},
+		})
+
+		if err != nil {
+			panic(err)
+		}
+
+		fmt.Printf("Reflect expression result: %v", v)
 	})
-
-	if err != nil {
-		panic(err)
-	}
-
-	eval := r.Compile(e)
-
-	v, err := eval(MessageContext{
-		Message: "Hello World!",
-		Time: TimePackage{
-			Now:    time.Now(),
-			Today:  time.Now().Local(),
-			Sunday: time.Sunday,
-		},
-	})
-
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Printf("Reflect expression result: %v", v)
 }
