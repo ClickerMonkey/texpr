@@ -2,6 +2,7 @@ package texpr
 
 import (
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -10,402 +11,324 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestIt(t *testing.T) {
-	const (
-		TypeInt         = TypeName("int")
-		TypeText        = TypeName("text")
-		TypeDate        = TypeName("date")
-		TypeDuration    = TypeName("duration")
-		TypeDateTime    = TypeName("dateTime")
-		TypeTime        = TypeName("time")
-		TypeDayOfWeek   = TypeName("dayOfWeek")
-		TypeBool        = TypeName("bool")
-		TypeUser        = TypeName("user")
-		TypeContext     = TypeName("context")
-		TypeTimePackage = TypeName("timePackage")
-	)
+type Run func(root any) (any, error)
 
-	sys, err := NewSystem([]Type{{
-		Name:        TypeDayOfWeek,
-		Description: "A day of the week",
-		Enums:       []string{"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"},
-		As: map[TypeName]string{
-			TypeText: "text",
-		},
-		Values: []Value{
-			{Path: "text", Type: TypeText},
-			{Path: "=", Type: TypeBool, Parameters: []Parameter{
-				{Name: "value", Type: TypeDayOfWeek},
-			}},
-			{Path: "!=", Type: TypeBool, Parameters: []Parameter{
-				{Name: "value", Type: TypeDayOfWeek},
-			}},
-			{Path: "oneOf", Type: TypeBool, Variadic: true, Parameters: []Parameter{
-				{Name: "values", Type: TypeDayOfWeek},
-			}},
-		},
-		Parse: func(x string) (any, error) {
-			k := strings.ToLower(x)
-			switch k {
-			case "sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday":
-				return k, nil
-			}
-			return nil, fmt.Errorf("%s invalid day of week", x)
-		},
-	}, {
-		Name:        TypeDuration,
-		Description: "A duration of time",
-		Enums:       []string{"year", "month", "week", "day", "hour", "minute", "second"},
-		Parse: func(x string) (any, error) {
-			k := strings.ToLower(x)
-			switch k {
-			case "year", "month", "week", "day", "hour", "minute", "second":
-				return k, nil
-			}
-			return nil, fmt.Errorf("%s invalid duration", x)
-		},
-	}, {
-		Name:        TypeDate,
-		Description: "A date without time or zone",
-		As: map[TypeName]string{
-			TypeText: "text",
-		},
-		Values: []Value{
-			{Path: "text", Type: TypeText},
-			{Path: "year", Type: TypeInt},
-			{Path: "month", Type: TypeInt},
-			{Path: "dayOfMonth", Type: TypeInt},
-			{Path: "dayOfWeek", Type: TypeDayOfWeek},
-			{Path: "add", Type: TypeDate, Parameters: []Parameter{
-				{Name: "amount", Type: TypeInt},
-				{Name: "duration", Type: TypeDuration},
-			}},
-		},
-		Parse: func(x string) (any, error) {
-			return time.Parse(time.DateOnly, x)
-		},
-	}, {
-		Name:        TypeDateTime,
-		Description: "A date & time without zone",
-		As: map[TypeName]string{
-			TypeText: "text",
-		},
-		Values: []Value{
-			{Path: "text", Type: TypeText},
-			{Path: "date", Type: TypeDate},
-			{Path: "time", Type: TypeTime},
-			{Path: "hour", Type: TypeInt},
-			{Path: "minute", Type: TypeInt},
-			{Path: "second", Type: TypeInt},
-			{Path: "year", Type: TypeInt},
-			{Path: "month", Type: TypeInt},
-			{Path: "dayOfMonth", Type: TypeInt},
-			{Path: "dayOfWeek", Type: TypeDayOfWeek},
-			{Path: "add", Type: TypeDate, Parameters: []Parameter{
-				{Name: "amount", Type: TypeInt},
-				{Name: "duration", Type: TypeDuration},
-			}},
-		},
-		Parse: func(x string) (any, error) {
-			return time.Parse(time.DateTime, x)
-		},
-	}, {
-		Name:        TypeTime,
-		Description: "A time without zone",
-		As: map[TypeName]string{
-			TypeText: "text",
-		},
-		Values: []Value{
-			{Path: "text", Type: TypeText},
-			{Path: "hour", Type: TypeInt},
-			{Path: "minute", Type: TypeInt},
-			{Path: "second", Type: TypeInt},
-			{Path: "add", Type: TypeDate, Parameters: []Parameter{
-				{Name: "amount", Type: TypeInt},
-				{Name: "duration", Type: TypeDuration},
-			}},
-		},
-		Parse: func(x string) (any, error) {
-			return time.Parse(time.TimeOnly, x)
-		},
-	}, {
-		Name:        TypeInt,
-		Description: "A whole number",
-		As: map[TypeName]string{
-			TypeText: "text",
-		},
-		Values: []Value{
-			{Path: "text", Type: TypeText},
-			{Path: ">", Type: TypeBool, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: ">=", Type: TypeBool, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: "<", Type: TypeBool, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: "<=", Type: TypeBool, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: "=", Type: TypeBool, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: "!=", Type: TypeBool, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: "+", Type: TypeInt, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: "-", Type: TypeInt, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: "*", Type: TypeInt, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: "/", Type: TypeInt, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-			{Path: "%", Type: TypeInt, Parameters: []Parameter{
-				{Name: "value", Type: TypeInt},
-			}},
-		},
-		Parse: func(x string) (any, error) {
-			return strconv.ParseInt(x, 10, 64)
-		},
-	}, {
-		Name:        TypeBool,
-		Description: "A true/false value",
-		Enums:       []string{"true", "false"},
-		As: map[TypeName]string{
-			TypeText: "text",
-		},
-		Values: []Value{
-			{Path: "text", Type: TypeText},
-			{Path: "not", Type: TypeBool},
-			{Path: "and", Type: TypeBool, Variadic: true, Parameters: []Parameter{
-				{Name: "values", Type: TypeBool},
-			}},
-			{Path: "or", Type: TypeBool, Variadic: true, Parameters: []Parameter{
-				{Name: "values", Type: TypeBool},
-			}},
-		},
-		Parse: func(x string) (any, error) {
-			return strconv.ParseBool(x)
-		},
-	}, {
-		Name:        TypeUser,
-		Description: "A user of our system",
-		As: map[TypeName]string{
-			TypeText: "name",
-		},
-		Values: []Value{
-			{Path: "name", Type: TypeText},
-			{Path: "createDate", Type: TypeDateTime},
-		},
-	}, {
-		Name:        TypeContext,
-		Description: "The context for evaluating expressions.",
-		Values: []Value{
-			{Path: "time", Type: TypeTimePackage},
-			{Path: "user", Type: TypeUser},
-		},
-	}, {
-		Name:        TypeTimePackage,
-		Description: "The package for date & time related expressions.",
-		Values: []Value{
-			{Path: "today", Type: TypeDate},
-			{Path: "yesterday", Type: TypeDate},
-			{Path: "tomorrow", Type: TypeDate},
-			{Path: "now", Type: TypeDateTime},
-			{Path: "current", Type: TypeTime},
-			{Path: "sunday", Type: TypeDayOfWeek, Description: "An unambiguous way to refer to Sunday"},
-			{Path: "monday", Type: TypeDayOfWeek, Description: "An unambiguous way to refer to Monday"},
-			{Path: "tuesday", Type: TypeDayOfWeek, Description: "An unambiguous way to refer to Tuesday"},
-			{Path: "wednesday", Type: TypeDayOfWeek, Description: "An unambiguous way to refer to Wednesday"},
-			{Path: "thursday", Type: TypeDayOfWeek, Description: "An unambiguous way to refer to Thursday"},
-			{Path: "friday", Type: TypeDayOfWeek, Description: "An unambiguous way to refer to Friday"},
-			{Path: "saturday", Type: TypeDayOfWeek, Description: "An unambiguous way to refer to Saturday"},
-		},
-	}, {
-		Name: TypeText,
-		Values: []Value{
-			{Path: "lower", Type: TypeText},
-			{Path: "upper", Type: TypeText},
-			{Path: "isLower", Type: TypeBool},
-			{Path: "isUpper", Type: TypeBool},
-			{Path: "+", Type: TypeText, Parameters: []Parameter{
-				{Name: "value", Type: TypeText},
-			}},
-			{Path: "=", Type: TypeBool, Parameters: []Parameter{
-				{Name: "value", Type: TypeText},
-			}},
-			{Path: "!=", Type: TypeBool, Parameters: []Parameter{
-				{Name: "value", Type: TypeText},
-			}},
-			{Path: "contains", Type: TypeBool, Parameters: []Parameter{
-				{Name: "value", Type: TypeText},
-			}},
-		},
-		ParseOrder: -1,
-		Parse: func(x string) (any, error) {
-			return x, nil
-		},
-	}})
+const (
+	typeInt         = TypeName("int")
+	typeText        = TypeName("text")
+	typeDate        = TypeName("date")
+	typeDuration    = TypeName("duration")
+	typeDateTime    = TypeName("dateTime")
+	typeTime        = TypeName("time")
+	typeDayOfWeek   = TypeName("dayOfWeek")
+	typeBool        = TypeName("bool")
+	typeUser        = TypeName("user")
+	typeContext     = TypeName("context")
+	typeTimePackage = TypeName("timePackage")
+)
 
-	if err != nil {
-		panic(err)
-	}
-
-	type Run func(v any, root any) (any, error)
-	type RunRoot func(root any) (any, error)
-	type Compile func(e *Expr, rootType *Type) (Run, error)
-	type Compilers map[TypeName]map[string]Compile
-
-	var compilers Compilers
-
-	compile := func(e *Expr, rootType *Type) (RunRoot, error) {
-		current := e
-		parent := rootType
-		runners := make([]Run, 0)
-
-		for current != nil {
-			if current.Value != nil && current.Type != nil {
-				cmp := compilers[parent.Name][current.Value.Path]
-				if cmp == nil {
-					return nil, fmt.Errorf("no compiler found: %s.%s", parent.Name, current.Value.Path)
-				}
-				run, err := cmp(current, rootType)
-				if err != nil || run == nil {
-					return nil, err
-				}
-				runners = append(runners, run)
-			} else if current.Constant && current.Type != nil && current.Type.Parse != nil {
-				parsed, err := current.Type.ParseInput(current.Token)
-				if err != nil {
-					return nil, err
-				}
-				runners = append(runners, func(v, root any) (any, error) {
-					return parsed, nil
-				})
-			} else {
-				return nil, fmt.Errorf("unexpected token to compile: %s.%s", parent.Name, current.Token)
-			}
-
-			parent = current.Type
-			current = current.Next
+var sys = NewSystemRequired([]Type{{
+	Name:        typeDayOfWeek,
+	Description: "A day of the week",
+	Enums:       []string{"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"},
+	As: map[TypeName]string{
+		typeText: "text",
+	},
+	Values: []Value{
+		{Path: "text", Type: typeText},
+		{Path: "=", Type: typeBool, Parameters: []Parameter{
+			{Name: "value", Type: typeDayOfWeek},
+		}},
+		{Path: "!=", Type: typeBool, Parameters: []Parameter{
+			{Name: "value", Type: typeDayOfWeek},
+		}},
+		{Path: "oneOf", Type: typeBool, Variadic: true, Parameters: []Parameter{
+			{Name: "values", Type: typeDayOfWeek},
+		}},
+	},
+	Parse: func(x string) (any, error) {
+		k := strings.ToLower(x)
+		switch k {
+		case "sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday":
+			return k, nil
 		}
+		return nil, fmt.Errorf("%s invalid day of week", x)
+	},
+}, {
+	Name:        typeDuration,
+	Description: "A duration of time",
+	Enums:       []string{"year", "month", "week", "day", "hour", "minute", "second"},
+	Parse: func(x string) (any, error) {
+		k := strings.ToLower(x)
+		switch k {
+		case "year", "month", "week", "day", "hour", "minute", "second":
+			return k, nil
+		}
+		return nil, fmt.Errorf("%s invalid duration", x)
+	},
+}, {
+	Name:        typeDate,
+	Description: "A date without time or zone",
+	As: map[TypeName]string{
+		typeText: "text",
+	},
+	Values: []Value{
+		{Path: "text", Type: typeText},
+		{Path: "year", Type: typeInt},
+		{Path: "month", Type: typeInt},
+		{Path: "dayOfMonth", Type: typeInt},
+		{Path: "dayOfWeek", Type: typeDayOfWeek},
+		{Path: "add", Type: typeDate, Parameters: []Parameter{
+			{Name: "amount", Type: typeInt},
+			{Name: "duration", Type: typeDuration},
+		}},
+	},
+	Parse: func(x string) (any, error) {
+		return time.Parse(time.DateOnly, x)
+	},
+}, {
+	Name:        typeDateTime,
+	Description: "A date & time without zone",
+	As: map[TypeName]string{
+		typeText: "text",
+	},
+	Values: []Value{
+		{Path: "text", Type: typeText},
+		{Path: "date", Type: typeDate},
+		{Path: "time", Type: typeTime},
+		{Path: "hour", Type: typeInt},
+		{Path: "minute", Type: typeInt, Aliases: []string{"min"}},
+		{Path: "second", Type: typeInt},
+		{Path: "year", Type: typeInt},
+		{Path: "month", Type: typeInt},
+		{Path: "dayOfMonth", Type: typeInt},
+		{Path: "dayOfWeek", Type: typeDayOfWeek},
+		{Path: "add", Type: typeDate, Parameters: []Parameter{
+			{Name: "amount", Type: typeInt},
+			{Name: "duration", Type: typeDuration},
+		}},
+	},
+	Parse: func(x string) (any, error) {
+		return time.Parse(time.DateTime, x)
+	},
+}, {
+	Name:        typeTime,
+	Description: "A time without zone",
+	As: map[TypeName]string{
+		typeText: "text",
+	},
+	Values: []Value{
+		{Path: "text", Type: typeText},
+		{Path: "hour", Type: typeInt},
+		{Path: "minute", Type: typeInt, Aliases: []string{"min"}},
+		{Path: "second", Type: typeInt},
+		{Path: "add", Type: typeDate, Parameters: []Parameter{
+			{Name: "amount", Type: typeInt},
+			{Name: "duration", Type: typeDuration},
+		}},
+	},
+	Parse: func(x string) (any, error) {
+		return time.Parse(time.TimeOnly, x)
+	},
+}, {
+	Name:        typeInt,
+	Description: "A whole number",
+	As: map[TypeName]string{
+		typeText: "text",
+	},
+	Values: []Value{
+		{Path: "text", Type: typeText},
+		{Path: ">", Type: typeBool, Parameters: []Parameter{
+			{Name: "value", Type: typeInt},
+		}},
+		{Path: ">=", Type: typeBool, Parameters: []Parameter{
+			{Name: "value", Type: typeInt},
+		}},
+		{Path: "<", Type: typeBool, Parameters: []Parameter{
+			{Name: "value", Type: typeInt},
+		}},
+		{Path: "<=", Type: typeBool, Parameters: []Parameter{
+			{Name: "value", Type: typeInt},
+		}},
+		{Path: "=", Type: typeBool, Parameters: []Parameter{
+			{Name: "value", Type: typeInt},
+		}},
+		{Path: "!=", Type: typeBool, Parameters: []Parameter{
+			{Name: "value", Type: typeInt},
+		}},
+		{Path: "+", Type: typeInt, Parameters: []Parameter{
+			{Name: "value", Type: typeInt},
+		}},
+		{Path: "-", Type: typeInt, Parameters: []Parameter{
+			{Name: "value", Type: typeInt},
+		}},
+		{Path: "*", Type: typeInt, Parameters: []Parameter{
+			{Name: "value", Type: typeInt},
+		}},
+		{Path: "/", Type: typeInt, Parameters: []Parameter{
+			{Name: "value", Type: typeInt},
+		}},
+		{Path: "%", Type: typeInt, Parameters: []Parameter{
+			{Name: "value", Type: typeInt},
+		}},
+	},
+	Parse: func(x string) (any, error) {
+		v, err := strconv.ParseInt(x, 10, 64)
+		return int(v), err
+	},
+}, {
+	Name:        typeBool,
+	Description: "A true/false value",
+	Enums:       []string{"true", "false"},
+	As: map[TypeName]string{
+		typeText: "text",
+	},
+	Values: []Value{
+		{Path: "text", Type: typeText},
+		{Path: "not", Type: typeBool},
+		{Path: "and", Type: typeBool, Variadic: true, Parameters: []Parameter{
+			{Name: "values", Type: typeBool},
+		}},
+		{Path: "or", Type: typeBool, Variadic: true, Parameters: []Parameter{
+			{Name: "values", Type: typeBool},
+		}},
+	},
+	Parse: func(x string) (any, error) {
+		switch strings.ToLower(x) {
+		case "true":
+			return true, nil
+		case "false":
+			return false, nil
+		}
+		return nil, fmt.Errorf("%s is not a valid true/false value", x)
+	},
+}, {
+	Name:        typeUser,
+	Description: "A user of our system",
+	As: map[TypeName]string{
+		typeText: "name",
+	},
+	Values: []Value{
+		{Path: "name", Type: typeText},
+		{Path: "createDate", Type: typeDateTime},
+	},
+}, {
+	Name:        typeContext,
+	Description: "The context for evaluating expressions.",
+	Values: []Value{
+		{Path: "time", Type: typeTimePackage},
+		{Path: "user", Type: typeUser},
+	},
+}, {
+	Name:        typeTimePackage,
+	Description: "The package for date & time related expressions.",
+	Values: []Value{
+		{Path: "today", Type: typeDate},
+		{Path: "yesterday", Type: typeDate},
+		{Path: "tomorrow", Type: typeDate},
+		{Path: "now", Type: typeDateTime},
+		{Path: "current", Type: typeTime},
+		{Path: "sunday", Type: typeDayOfWeek, Description: "An unambiguous way to refer to Sunday"},
+		{Path: "monday", Type: typeDayOfWeek, Description: "An unambiguous way to refer to Monday"},
+		{Path: "tuesday", Type: typeDayOfWeek, Description: "An unambiguous way to refer to Tuesday"},
+		{Path: "wednesday", Type: typeDayOfWeek, Description: "An unambiguous way to refer to Wednesday"},
+		{Path: "thursday", Type: typeDayOfWeek, Description: "An unambiguous way to refer to Thursday"},
+		{Path: "friday", Type: typeDayOfWeek, Description: "An unambiguous way to refer to Friday"},
+		{Path: "saturday", Type: typeDayOfWeek, Description: "An unambiguous way to refer to Saturday"},
+	},
+}, {
+	Name: typeText,
+	Values: []Value{
+		{Path: "length", Type: typeInt, Aliases: []string{"len"}},
+		{Path: "lower", Type: typeText},
+		{Path: "upper", Type: typeText},
+		{Path: "isLower", Type: typeBool},
+		{Path: "isUpper", Type: typeBool},
+		{Path: "+", Type: typeText, Parameters: []Parameter{
+			{Name: "value", Type: typeText},
+		}},
+		{Path: "=", Type: typeBool, Parameters: []Parameter{
+			{Name: "value", Type: typeText},
+		}},
+		{Path: "!=", Type: typeBool, Parameters: []Parameter{
+			{Name: "value", Type: typeText},
+		}},
+		{Path: "contains", Type: typeBool, Parameters: []Parameter{
+			{Name: "value", Type: typeText},
+		}},
+	},
+	ParseOrder: -1,
+	Parse: func(x string) (any, error) {
+		return x, nil
+	},
+}})
 
+var compileOptions = CompileOptions[Run]{
+	Initial: func(root any) (any, error) {
+		return root, nil
+	},
+	ConstantCompiler: func(e *Expr, root *Type, previous Run, arguments []Run) (Run, error) {
 		return func(root any) (any, error) {
-			c := root
-			var err error
-			for _, run := range runners {
-				c, err = run(c, root)
-				if err != nil {
-					return nil, err
-				}
-			}
-			return c, nil
+			return e.Parsed, nil
 		}, nil
-	}
-
-	mapKeyCompile := func(key string) Compile {
-		return func(e *Expr, rootType *Type) (Run, error) {
-			return func(v, root any) (any, error) {
-				return v.(map[string]any)[key], nil
-			}, nil
-		}
-	}
-
-	compileArguments := func(e *Expr, rootType *Type, withArgs func(args []RunRoot) Run) (Run, error) {
-		args := make([]RunRoot, len(e.Arguments))
-		var err error
-		for i, arg := range e.Arguments {
-			args[i], err = compile(arg, rootType)
-			if err != nil {
-				return nil, err
-			}
-		}
-		return withArgs(args), nil
-	}
-
-	compilers = Compilers{
-		TypeDateTime: map[string]Compile{
-			"hour": func(e *Expr, rootType *Type) (Run, error) {
-				return func(v any, root any) (any, error) {
-					return int64(v.(time.Time).Hour()), nil
-				}, nil
-			},
+	},
+	TypeCompilers: TypeCompilers[Run]{
+		typeDateTime: ValueCompilers[Run]{
+			"hour": runCompiler(func(v time.Time, args []any) (any, error) {
+				return v.Hour(), nil
+			}),
+			"minute": runCompiler(func(v time.Time, args []any) (any, error) {
+				return v.Minute(), nil
+			}),
 		},
-		TypeInt: map[string]Compile{
-			">": func(e *Expr, rootType *Type) (Run, error) {
-				return compileArguments(e, rootType, func(args []RunRoot) Run {
-					return func(v any, root any) (any, error) {
-						o, err := args[0](root)
-						if err != nil {
-							return false, err
-						}
-						return v.(int64) > o.(int64), nil
+		typeInt: ValueCompilers[Run]{
+			"text": runCompiler(func(v int, args []any) (any, error) {
+				return fmt.Sprintf("%d", v), nil
+			}),
+			"=": runCompiler(func(v int, args []any) (any, error) {
+				return v == args[0].(int), nil
+			}),
+			">": runCompiler(func(v int, args []any) (any, error) {
+				return v > args[0].(int), nil
+			}),
+			">=": runCompiler(func(v int, args []any) (any, error) {
+				return v >= args[0].(int), nil
+			}),
+		},
+		typeBool: ValueCompilers[Run]{
+			"text": runCompiler(func(v bool, args []any) (any, error) {
+				return strconv.FormatBool(v), nil
+			}),
+			"and": runCompiler(func(v bool, args []any) (any, error) {
+				if !v {
+					return false, nil
+				}
+				for _, a := range args {
+					if !a.(bool) {
+						return false, nil
 					}
-				})
-			},
+				}
+				return true, nil
+			}),
 		},
-		TypeBool: map[string]Compile{
-			"and": func(e *Expr, rootType *Type) (Run, error) {
-				return compileArguments(e, rootType, func(args []RunRoot) Run {
-					return func(v, root any) (any, error) {
-						all := true
-						for _, condition := range args {
-							conditionValue, err := condition(root)
-							if err != nil {
-								return false, err
-							}
-							all = all && conditionValue.(bool)
-						}
-						return all, nil
-					}
-				})
-			},
-			"text": func(e *Expr, rootType *Type) (Run, error) {
-				return func(v, root any) (any, error) {
-					if b, ok := v.(bool); ok && b {
-						return "true", nil
-					}
-					return "false", nil
-				}, nil
-			},
+		typeText: ValueCompilers[Run]{
+			"length": runCompiler(func(v string, args []any) (any, error) {
+				return len(v), nil
+			}),
+			"contains": runCompiler(func(v string, args []any) (any, error) {
+				return strings.Contains(v, args[0].(string)), nil
+			}),
+			"lower": runCompiler(func(v string, args []any) (any, error) {
+				return strings.ToLower(v), nil
+			}),
 		},
-		TypeText: map[string]Compile{
-			"contains": func(e *Expr, rootType *Type) (Run, error) {
-				return compileArguments(e, rootType, func(args []RunRoot) Run {
-					return func(v, root any) (any, error) {
-						o, err := args[0](root)
-						if err != nil {
-							return false, err
-						}
-						return strings.Contains(v.(string), o.(string)), nil
-					}
-				})
-			},
-			"lower": func(e *Expr, rootType *Type) (Run, error) {
-				return func(v, root any) (any, error) {
-					return strings.ToLower(v.(string)), nil
-				}, nil
-			},
-		},
-		TypeUser: map[string]Compile{
-			"name": mapKeyCompile("name"),
-		},
-		TypeContext: map[string]Compile{
-			"time": mapKeyCompile("time"),
-			"user": mapKeyCompile("user"),
-		},
-		TypeTimePackage: map[string]Compile{
-			"now":    mapKeyCompile("now"),
-			"sunday": mapKeyCompile("sunday"),
-		},
-	}
+		typeUser:        mapValueCompiler("name", "createDate"),
+		typeContext:     mapValueCompiler("time", "user"),
+		typeTimePackage: mapValueCompiler("now", "sunday"),
+	},
+}
 
+func TestIt(t *testing.T) {
 	tests := []struct {
 		name           string
 		options        Options
@@ -414,12 +337,12 @@ func TestIt(t *testing.T) {
 		expectedValue  any
 		expectedType   TypeName
 		expectedError  string
-		expectedCheck  func(*Expr, *testing.T)
+		postParseCheck func(*Expr, *testing.T)
 	}{{
 		name: "complex",
 		options: Options{
-			RootType:      TypeContext,
-			ExpectedTypes: []TypeName{TypeBool},
+			RootType:      typeContext,
+			ExpectedTypes: []TypeName{typeBool},
 			Expression:    "time.now.hour>(12).and(user.name.contains('Ma'))",
 		},
 		expectedString: "time.now.hour>('12').and(user.name.contains('Ma'))",
@@ -435,7 +358,7 @@ func TestIt(t *testing.T) {
 	}, {
 		name: "user.name.lower",
 		options: Options{
-			RootType:   TypeContext,
+			RootType:   typeContext,
 			Expression: "user.name.lower",
 		},
 		expectedString: "user.name.lower",
@@ -448,7 +371,7 @@ func TestIt(t *testing.T) {
 	}, {
 		name: "time.now.hour",
 		options: Options{
-			RootType:   TypeContext,
+			RootType:   typeContext,
 			Expression: "time.now.hour",
 		},
 		expectedString: "time.now.hour",
@@ -457,21 +380,21 @@ func TestIt(t *testing.T) {
 				"now": time.Date(2023, 4, 11, 13, 0, 0, 0, time.Local),
 			},
 		},
-		expectedValue: int64(13),
+		expectedValue: int(13),
 	}, {
 		name: "sunday",
 		options: Options{
-			RootType:   TypeContext,
+			RootType:   typeContext,
 			Expression: "sunday",
 		},
 		expectedString: "'sunday'",
 		input:          map[string]any{},
 		expectedValue:  "sunday",
-		expectedType:   TypeDayOfWeek,
+		expectedType:   typeDayOfWeek,
 	}, {
 		name: "time.sunday",
 		options: Options{
-			RootType:   TypeContext,
+			RootType:   typeContext,
 			Expression: "time.Sunday",
 		},
 		expectedString: "time.Sunday",
@@ -481,11 +404,11 @@ func TestIt(t *testing.T) {
 			},
 		},
 		expectedValue: "sunday",
-		expectedType:  TypeDayOfWeek,
+		expectedType:  typeDayOfWeek,
 	}, {
 		name: "time.sunday with tab",
 		options: Options{
-			RootType:   TypeContext,
+			RootType:   typeContext,
 			Expression: "\n\ttime.\tSunday\n",
 		},
 		expectedString: "time.Sunday",
@@ -495,24 +418,24 @@ func TestIt(t *testing.T) {
 			},
 		},
 		expectedValue: "sunday",
-		expectedType:  TypeDayOfWeek,
+		expectedType:  typeDayOfWeek,
 	}, {
 		name: "time.sun error",
 		options: Options{
-			RootType:   TypeContext,
+			RootType:   typeContext,
 			Expression: "time.sun",
 		},
 		expectedError: "invalid value sun",
 	}, {
 		name: "time.sun error check",
 		options: Options{
-			RootType:   TypeContext,
+			RootType:   typeContext,
 			Expression: "time.sun",
 		},
-		expectedCheck: func(e *Expr, t *testing.T) {
+		postParseCheck: func(e *Expr, t *testing.T) {
 			assert.Equal(t, e.Token, "time")
 			assert.NotNil(t, e.Type)
-			assert.Equal(t, e.Type.Name, TypeTimePackage)
+			assert.Equal(t, e.Type.Name, typeTimePackage)
 			assert.NotNil(t, e.Next)
 			assert.Equal(t, e.Next.Token, "sun")
 			assert.Nil(t, e.Next.Type)
@@ -523,13 +446,13 @@ func TestIt(t *testing.T) {
 	}, {
 		name: "time. error check",
 		options: Options{
-			RootType:   TypeContext,
+			RootType:   typeContext,
 			Expression: "time.",
 		},
-		expectedCheck: func(e *Expr, t *testing.T) {
+		postParseCheck: func(e *Expr, t *testing.T) {
 			assert.Equal(t, e.Token, "time")
 			assert.NotNil(t, e.Type)
-			assert.Equal(t, e.Type.Name, TypeTimePackage)
+			assert.Equal(t, e.Type.Name, typeTimePackage)
 			assert.NotNil(t, e.Next)
 			assert.Equal(t, e.Next.Token, "")
 			assert.Nil(t, e.Next.Type)
@@ -540,46 +463,58 @@ func TestIt(t *testing.T) {
 	}, {
 		name: "bool detect",
 		options: Options{
-			RootType:   TypeContext,
+			RootType:   typeContext,
 			Expression: "true",
 		},
-		expectedType:  TypeBool,
+		expectedType:  typeBool,
 		expectedValue: true,
 	}, {
 		name: "bool detect convert to text",
 		options: Options{
-			RootType:      TypeContext,
+			RootType:      typeContext,
 			Expression:    "true",
-			ExpectedTypes: []TypeName{TypeText},
+			ExpectedTypes: []TypeName{typeText},
 		},
-		expectedType:  TypeText,
+		expectedType:  typeText,
 		expectedValue: "true",
 	}, {
 		name: "bool detect expect many stay same",
 		options: Options{
-			RootType:      TypeContext,
+			RootType:      typeContext,
 			Expression:    "true",
-			ExpectedTypes: []TypeName{TypeBool, TypeText},
+			ExpectedTypes: []TypeName{typeBool, typeText},
 		},
-		expectedType:  TypeBool,
+		expectedType:  typeBool,
 		expectedValue: true,
 	}, {
 		name: "bool detect expect many convert to text",
 		options: Options{
-			RootType:      TypeContext,
+			RootType:      typeContext,
 			Expression:    "true",
-			ExpectedTypes: []TypeName{TypeInt, TypeText},
+			ExpectedTypes: []TypeName{typeInt, typeText},
 		},
-		expectedType:  TypeText,
+		expectedType:  typeText,
 		expectedValue: "true",
+	}, {
+		name: "variadic",
+		options: Options{
+			RootType:   typeUser,
+			Expression: "name.len=(12).and(createDate.hour>(12), createDate.min=(0))",
+		},
+		input: map[string]any{
+			"name":       "pmd@site.com",
+			"createDate": time.Date(2023, 1, 1, 14, 0, 1, 2, time.Local),
+		},
+		expectedType:  typeBool,
+		expectedValue: true,
 	}}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			expr, err := sys.Parse(test.options)
 
-			if test.expectedCheck != nil {
-				test.expectedCheck(expr, t)
+			if test.postParseCheck != nil {
+				test.postParseCheck(expr, t)
 			}
 
 			if err != nil {
@@ -599,9 +534,7 @@ func TestIt(t *testing.T) {
 				assert.Equal(t, test.expectedString, expr.String())
 			}
 
-			rootType := sys.Type(test.options.RootType)
-
-			compiled, err := compile(expr, rootType)
+			compiled, err := Compile(expr, compileOptions)
 			if err != nil {
 				if test.expectedError != "" {
 					assert.Equal(t, test.expectedError, err.Error())
@@ -628,4 +561,38 @@ func TestIt(t *testing.T) {
 			}
 		})
 	}
+}
+
+func runCompiler[T any](call func(v T, args []any) (any, error)) Compiler[Run] {
+	return func(e *Expr, root *Type, previous Run, arguments []Run) (Run, error) {
+		return func(root any) (any, error) {
+			prev, err := previous(root)
+			if err != nil {
+				return nil, err
+			}
+			args := make([]any, len(arguments))
+			for i := range args {
+				args[i], err = arguments[i](root)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if asType, ok := prev.(T); ok {
+				return call(asType, args)
+			} else {
+				return nil, fmt.Errorf("unexpected type: %v, wanted %v", reflect.TypeOf(prev), reflect.TypeOf((*T)(nil)).Elem())
+			}
+		}, nil
+	}
+}
+
+func mapValueCompiler(keys ...string) ValueCompilers[Run] {
+	vc := ValueCompilers[Run]{}
+	for i := range keys {
+		key := keys[i]
+		vc[strings.ToLower(key)] = runCompiler(func(v map[string]any, args []any) (any, error) {
+			return v[key], nil
+		})
+	}
+	return vc
 }

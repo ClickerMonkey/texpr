@@ -7,39 +7,58 @@ import (
 	"strings"
 )
 
+// A name for a type.
 type TypeName string
 
-func (tn TypeName) ToKey() string {
-	return strings.ToLower(string(tn))
-}
-
+// A data type in an expression system. It can have values, with and without parameters.
+// It can also be automatically cast to another type with the `As` field.
 type Type struct {
-	Name        TypeName                    `json:"name"`
-	Description string                      `json:"description,omitempty"`
-	Values      []Value                     `json:"values,omitempty"`
-	As          map[TypeName]string         `json:"as,omitempty"`
-	Enums       []string                    `json:"enums,omitempty"`
-	Parse       func(x string) (any, error) `json:"-"`
-	ParseOrder  int                         `json:"parseOrder,omitempty"`
+	// The name of this type, should be unique.
+	Name TypeName `json:"name"`
+	// A description of this type.
+	Description string `json:"description,omitempty"`
+	// All values of this type.
+	Values []Value `json:"values,omitempty"`
+	// All types that this type can be converted to, and which value path can be used to do it.
+	As map[TypeName]string `json:"as,omitempty"`
+	// The type might be an enumerated value which means it has to be one of the specified values.
+	// Parse can be specified to validate this and return a different data type other than string.
+	Enums []string `json:"enums,omitempty"`
+	// A custom parse function that converts a constant into a real value that is stored in Expression.Parsed.
+	// If the given input does not match the type an error must be returned.
+	Parse func(x string) (any, error) `json:"-"`
+	// The parse order of the type. By default all types are considered equal and have an order of 0.
+	// Higher parse orders are used first. For all types with the same parse order they are ordered
+	// whether they have a Parse function (it prefers this). For two types with equivalent parse function
+	// specificity they are ordered by type name length (preferring longer types before shorter).
+	ParseOrder int `json:"parseOrder,omitempty"`
 
 	values map[string]*Value
 	as     map[TypeName]*Value
 	enums  map[string]string
 }
 
+// Returns the value with the given path, case insensitive. If this type was not given
+// to a system then a nil panic will occur.
 func (t Type) Value(path string) *Value {
 	return t.values[strings.ToLower(path)]
 }
 
+// Returns the value that's used to convert to the given type. If this type was not given
+// to a system then a nil panic will occur.
 func (t Type) AsValue(other TypeName) *Value {
 	return t.as[other]
 }
 
+// Returns the enum value that matches the given text. If this type was not given
+// to a system then a nil panic will occur.
 func (t Type) EnumFor(input string) (string, bool) {
 	value, ok := t.enums[strings.ToLower(input)]
 	return value, ok
 }
 
+// Parses the constant input and returns a matching value. If there is no parse or matching
+// enum option then an error is returned.
 func (t Type) ParseInput(input string) (any, error) {
 	if t.Parse == nil {
 		value, exists := t.EnumFor(input)
@@ -51,28 +70,39 @@ func (t Type) ParseInput(input string) (any, error) {
 	return t.Parse(input)
 }
 
+// A value (possibly with parameters) on a type.
 type Value struct {
-	Path        string      `json:"path"`
-	Aliases     []string    `json:"aliases,omitempty"`
-	Description string      `json:"description,omitempty"`
-	Type        TypeName    `json:"type"`
-	Parameters  []Parameter `json:"parameters,omitempty"`
-	Variadic    bool        `json:"variadic,omitempty"`
+	// The main path for the value. Alternatives can be specified with Aliases.
+	Path string `json:"path"`
+	// The aliases to the path, to allow for more than one way to refer to the value.
+	Aliases []string `json:"aliases,omitempty"`
+	// The description of the value.
+	Description string `json:"description,omitempty"`
+	// The type of the value.
+	Type TypeName `json:"type"`
+	// The parameters for the value.
+	Parameters []Parameter `json:"parameters,omitempty"`
+	// If the last parameter can be specified any number of times.
+	Variadic bool `json:"variadic,omitempty"`
 
 	valueType *Type
 }
 
+// The calculated type of the value. This will only be non-nil when the value is passed to a system.
 func (v Value) ValueType() *Type {
 	return v.valueType
 }
 
+// Returns the maximum number of possible parameters. If this value is not parameterized
+// this returns 0. If this value is parameterized and variadic it returns the largest possible int.
 func (v Value) MaxParameters() int {
-	if v.Variadic {
+	if v.Variadic && len(v.Parameters) > 0 {
 		return math.MaxInt
 	}
 	return len(v.Parameters)
 }
 
+// Returns the minimum number of required parameters
 func (v Value) MinParameters() int {
 	min := 0
 	if v.Parameters != nil {
@@ -85,6 +115,9 @@ func (v Value) MinParameters() int {
 	return min
 }
 
+// Returns the parameter at the given index. If this value is variadic and `i` goes
+// beyond the defined parameters the last parameter is defined. If no parameter exists
+// at the given index then nil is returned.
 func (v Value) Parameter(i int) *Parameter {
 	if i >= v.MaxParameters() || i < 0 {
 		return nil
@@ -95,6 +128,7 @@ func (v Value) Parameter(i int) *Parameter {
 	return &v.Parameters[i]
 }
 
+// A parameter to a parameterized value. Type or Generic is required.
 type Parameter struct {
 	Type        TypeName `json:"type"`
 	Name        string   `json:"name,omitempty"`
@@ -108,12 +142,14 @@ func (p Parameter) ParameterType() *Type {
 	return p.parameterType
 }
 
+// The position of a character in a multi-line string.
 type Position struct {
 	Index  int
 	Line   int
 	Column int
 }
 
+// The string representation of a position.
 func (p Position) String() string {
 	return fmt.Sprintf("(index: %d, line: %d, column: %d)", p.Index, p.Line, p.Column)
 }
@@ -131,7 +167,7 @@ type Expr struct {
 	Parsed any
 	// The value this expression is in the parent type.
 	Value *Value
-	// The parent type if any.
+	// The parent type if any. If prev is nil this represents the root type.
 	ParentType *Type
 	// The type of this value/constant.
 	Type *Type
@@ -180,6 +216,7 @@ func (e Expr) String() string {
 	return out.String()
 }
 
+// Returns the last expression in this chain.
 func (e *Expr) Last() *Expr {
 	c := e
 	for c.Next != nil {
@@ -188,6 +225,7 @@ func (e *Expr) Last() *Expr {
 	return c
 }
 
+// Returns a slice of all expressions in the chain starting with this expression.
 func (e *Expr) Chain() []*Expr {
 	chain := make([]*Expr, 0)
 	c := e
@@ -198,6 +236,9 @@ func (e *Expr) Chain() []*Expr {
 	return chain
 }
 
+// Returns if the type on this expression is one of the given types.
+// If this expression is nil or has no type then this will return whether the given types are empty.
+// Otherwise the type on the expression must match one of the given types.
 func (e *Expr) TypeOneOf(types []*Type) bool {
 	if e == nil || e.Type == nil {
 		return len(types) == 0
@@ -210,6 +251,7 @@ func (e *Expr) TypeOneOf(types []*Type) bool {
 	return false
 }
 
+// An error occurred during the parsing or linking of System.Parse.
 type ParseError struct {
 	Message   string
 	Expr      *Expr
@@ -220,6 +262,7 @@ type ParseError struct {
 
 var _ error = ParseError{}
 
+// Creates a new parse error given the expression (if any) and the message.
 func NewParseError(expr *Expr, message string) ParseError {
 	e := ParseError{
 		Message: message,
@@ -232,10 +275,12 @@ func NewParseError(expr *Expr, message string) ParseError {
 	return e
 }
 
+// The parse error message.
 func (e ParseError) Error() string {
 	return e.Message
 }
 
+// An error occurred building a system from types.
 type SystemError struct {
 	Message   string
 	Type      *Type
@@ -250,16 +295,27 @@ func (e SystemError) Error() string {
 	return e.Message
 }
 
+// A type system that validates types, values, parameters, etc.
 type System struct {
 	types      []*Type
-	typeMap    map[string]*Type
+	typeMap    map[TypeName]*Type
 	parseOrder []*Type
 }
 
+// Returns a System given a set of types and panics if any of the types, values, parameters, etc are malformed.
+func NewSystemRequired(types []Type) System {
+	sys, err := NewSystem(types)
+	if err != nil {
+		panic(err)
+	}
+	return sys
+}
+
+// Returns a new system and if any errors were found building the system.
 func NewSystem(types []Type) (System, error) {
 	sys := System{
 		types:      make([]*Type, len(types)),
-		typeMap:    make(map[string]*Type),
+		typeMap:    make(map[TypeName]*Type),
 		parseOrder: make([]*Type, 0, len(types)),
 	}
 	for i := range types {
@@ -299,7 +355,7 @@ func NewSystem(types []Type) (System, error) {
 		}
 
 		sys.types[i] = t
-		sys.typeMap[t.Name.ToKey()] = t
+		sys.typeMap[t.Name] = t
 
 		if t.Parse != nil || len(t.Enums) > 0 {
 			sys.parseOrder = append(sys.parseOrder, t)
@@ -348,28 +404,45 @@ func NewSystem(types []Type) (System, error) {
 	return sys, nil
 }
 
+// Returns the type in the system with the given name, or nil if none exists.
 func (s System) Type(name TypeName) *Type {
-	return s.typeMap[name.ToKey()]
+	return s.typeMap[name]
 }
 
+// Returns the types given to the system.
 func (s System) Types() []*Type {
 	return s.types
 }
 
+// Returns the types that can parse constants in the order determined by the system.
 func (s System) ParseOrder() []*Type {
 	return s.parseOrder
 }
 
+// The parse options for an expression string into an Expression struct.
 type Options struct {
-	RootType      TypeName
+	// The type that is used as the root of the expressions.
+	RootType TypeName
+	// The expected types if any. If none are given then the type of the expression is returned.
+	// If one or more are given then the expression is automatically cast to a desired type
+	// if possible, otherwise errors if it can't meet the expected types.
 	ExpectedTypes []TypeName
-	Expression    string
+	// The expression to parse.
+	Expression string
 }
 
+// No types are defined in the system.
 var ErrNoTypes = NewParseError(nil, "undefined types")
+
+// No expression was passed to the parse function.
 var ErrNoExpression = NewParseError(nil, "undefined expression")
+
+// No root type was specified in the options for parsing.
 var ErrNoRoot = NewParseError(nil, "undefined root type")
 
+// Parses an expression with the given set of options. Even if the expression is invalid it will be
+// returned and all attempts of determining types and values will be made to best inform the user
+// precisely what is wrong and what is valid.
 func (sys System) Parse(opts Options) (*Expr, error) {
 	if len(sys.Types()) == 0 {
 		return nil, ErrNoTypes
@@ -633,7 +706,10 @@ func (p *parser) parseExpr() (expr *Expr, err error) {
 			p.prev = p.parents[n]
 			p.parents = p.parents[:n]
 			p.i++
-		case '.', ',':
+		case ',':
+			p.prev = nil
+			p.i++
+		case '.':
 			p.i++
 		case '"', '\'':
 			expr, err = p.parseConstant()
