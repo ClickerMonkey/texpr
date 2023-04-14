@@ -267,7 +267,7 @@ var sys = NewSystemRequired([]Type{{
 	},
 }})
 
-var compileOptions = CompileOptions[Run]{
+var compileOptions = CompileSourceLookup[Run]{
 	Initial: func(root any) (any, error) {
 		return root, nil
 	},
@@ -589,7 +589,7 @@ func TestIt(t *testing.T) {
 				assert.Equal(t, test.expectedString, expr.String())
 			}
 
-			compiled, err := Compile(expr, compileOptions)
+			compiled, err := Compile[Run](expr, compileOptions)
 			if err != nil {
 				if test.expectedError != "" {
 					assert.Equal(t, test.expectedError, err.Error())
